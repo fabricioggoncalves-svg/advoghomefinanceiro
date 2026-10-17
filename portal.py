@@ -84,6 +84,7 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
     
+    # 0. Usuários
     c.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +110,7 @@ def init_db():
         elif not row[1]:
             c.execute("UPDATE usuarios SET senha_hash = ?, ativo = 1 WHERE id = ?", (shash, row[0]))
 
+    # Módulo Financeiro
     c.execute("CREATE TABLE IF NOT EXISTS contatos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, tipo TEXT CHECK(tipo IN ('Cliente', 'Fornecedor')) NOT NULL)")
     c.execute("CREATE TABLE IF NOT EXISTS historicos_padrao (id INTEGER PRIMARY KEY AUTOINCREMENT, codigo TEXT UNIQUE NOT NULL, descricao TEXT NOT NULL, tipo_aplicavel TEXT CHECK(tipo_aplicavel IN ('Receita', 'Despesa', 'Ambos')) NOT NULL)")
     c.execute("CREATE TABLE IF NOT EXISTS contas_sinteticas (id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT CHECK(tipo IN ('Receita', 'Despesa')) NOT NULL, nome TEXT NOT NULL, UNIQUE(tipo, nome))")
@@ -141,39 +143,82 @@ def init_db():
             FOREIGN KEY (conta_analitica_id) REFERENCES contas_analiticas(id), FOREIGN KEY (recorrente_id) REFERENCES contas_recorrentes(id)
         )
     """)
-    c.execute("CREATE TABLE IF NOT EXISTS tipos_tarefas (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL UNIQUE)")
-    c.execute("CREATE TABLE IF NOT EXISTS grupos_tarefas_n1 (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL UNIQUE)")
+
+    # Tipos de Tarefas
     c.execute("""
-        CREATE TABLE IF NOT EXISTS grupos_tarefas_n2 (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, grupo_n1_id INTEGER NOT NULL, nome TEXT NOT NULL,
-            UNIQUE(grupo_n1_id, nome), FOREIGN KEY (grupo_n1_id) REFERENCES grupos_tarefas_n1(id) ON DELETE CASCADE
+        CREATE TABLE IF NOT EXISTS tipos_tarefas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE
         )
     """)
+
+    # Tarefas Recorrentes (com coluna visibilidade)
     c.execute("""
         CREATE TABLE IF NOT EXISTS tarefas_recorrentes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL, descricao TEXT, frequencia TEXT NOT NULL, intervalo INTEGER DEFAULT 1,
-            data_inicio TEXT NOT NULL, proxima_execucao TEXT NOT NULL, prioridade TEXT DEFAULT 'Média', responsavel_id INTEGER, cliente_id INTEGER,
-            processo_ref TEXT, tipo_tarefa_id INTEGER, subgrupo_id INTEGER, criador_id INTEGER, visibilidade TEXT DEFAULT 'Compartilhada', ativo INTEGER DEFAULT 1,
-            FOREIGN KEY (responsavel_id) REFERENCES usuarios(id), FOREIGN KEY (cliente_id) REFERENCES contatos(id),
-            FOREIGN KEY (tipo_tarefa_id) REFERENCES tipos_tarefas(id), FOREIGN KEY (subgrupo_id) REFERENCES grupos_tarefas_n2(id), FOREIGN KEY (criador_id) REFERENCES usuarios(id)
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT NOT NULL,
+            descricao TEXT,
+            frequencia TEXT NOT NULL,
+            intervalo INTEGER DEFAULT 1,
+            data_inicio TEXT NOT NULL,
+            proxima_execucao TEXT NOT NULL,
+            prioridade TEXT DEFAULT 'Média',
+            responsavel_id INTEGER,
+            cliente_id INTEGER,
+            processo_ref TEXT,
+            tipo_tarefa_id INTEGER,
+            criador_id INTEGER,
+            visibilidade TEXT DEFAULT 'Pública',
+            ativo INTEGER DEFAULT 1,
+            FOREIGN KEY (responsavel_id) REFERENCES usuarios(id),
+            FOREIGN KEY (cliente_id) REFERENCES contatos(id),
+            FOREIGN KEY (tipo_tarefa_id) REFERENCES tipos_tarefas(id),
+            FOREIGN KEY (criador_id) REFERENCES usuarios(id)
         )
     """)
+
+    # Tarefas (com coluna visibilidade)
     c.execute("""
         CREATE TABLE IF NOT EXISTS tarefas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL, descricao TEXT, data_limite TEXT, prioridade TEXT DEFAULT 'Média',
-            status TEXT DEFAULT 'Não Iniciada', responsavel_id INTEGER, cliente_id INTEGER, processo_ref TEXT, tipo_tarefa_id INTEGER,
-            subgrupo_id INTEGER, criador_id INTEGER, visibilidade TEXT DEFAULT 'Compartilhada', recorrente_origem_id INTEGER, criado_em TEXT,
-            FOREIGN KEY (responsavel_id) REFERENCES usuarios(id), FOREIGN KEY (cliente_id) REFERENCES contatos(id),
-            FOREIGN KEY (tipo_tarefa_id) REFERENCES tipos_tarefas(id), FOREIGN KEY (subgrupo_id) REFERENCES grupos_tarefas_n2(id),
-            FOREIGN KEY (criador_id) REFERENCES usuarios(id), FOREIGN KEY (recorrente_origem_id) REFERENCES tarefas_recorrentes(id) ON DELETE SET NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT NOT NULL,
+            descricao TEXT,
+            data_limite TEXT,
+            prioridade TEXT DEFAULT 'Média',
+            status TEXT DEFAULT 'Não Iniciada',
+            responsavel_id INTEGER,
+            cliente_id INTEGER,
+            processo_ref TEXT,
+            tipo_tarefa_id INTEGER,
+            criador_id INTEGER,
+            visibilidade TEXT DEFAULT 'Pública',
+            recorrente_origem_id INTEGER,
+            criado_em TEXT,
+            FOREIGN KEY (responsavel_id) REFERENCES usuarios(id),
+            FOREIGN KEY (cliente_id) REFERENCES contatos(id),
+            FOREIGN KEY (tipo_tarefa_id) REFERENCES tipos_tarefas(id),
+            FOREIGN KEY (criador_id) REFERENCES usuarios(id),
+            FOREIGN KEY (recorrente_origem_id) REFERENCES tarefas_recorrentes(id) ON DELETE SET NULL
         )
     """)
-    c.execute("CREATE TABLE IF NOT EXISTS tarefas_compartilhadas (tarefa_id INTEGER, usuario_id INTEGER, PRIMARY KEY (tarefa_id, usuario_id))")
+
+    # Migração segura para adicionar visibilidade se tabela já existir sem ela
+    c.execute("PRAGMA table_info(tarefas)")
+    cols_t = [i[1] for i in c.fetchall()]
+    if "visibilidade" not in cols_t:
+        c.execute("ALTER TABLE tarefas ADD COLUMN visibilidade TEXT DEFAULT 'Pública'")
+
+    c.execute("PRAGMA table_info(tarefas_recorrentes)")
+    cols_tr = [i[1] for i in c.fetchall()]
+    if "visibilidade" not in cols_tr:
+        c.execute("ALTER TABLE tarefas_recorrentes ADD COLUMN visibilidade TEXT DEFAULT 'Pública'")
+
+    # Agenda
     c.execute("""
         CREATE TABLE IF NOT EXISTS compromissos_recorrentes (
             id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL, descricao TEXT, frequencia TEXT NOT NULL, intervalo INTEGER DEFAULT 1,
             data_inicio TEXT NOT NULL, hora_inicio TEXT, duracao_minutos INTEGER DEFAULT 60, dia_inteiro INTEGER DEFAULT 0, local_link TEXT,
-            cliente_id INTEGER, processo_ref TEXT, organizador_id INTEGER NOT NULL, visibilidade TEXT DEFAULT 'Compartilhada', ativo INTEGER DEFAULT 1,
+            cliente_id INTEGER, processo_ref TEXT, organizador_id INTEGER NOT NULL, ativo INTEGER DEFAULT 1,
             FOREIGN KEY (cliente_id) REFERENCES contatos(id), FOREIGN KEY (organizador_id) REFERENCES usuarios(id)
         )
     """)
@@ -181,7 +226,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS compromissos (
             id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL, descricao TEXT, data_inicio TEXT NOT NULL, hora_inicio TEXT,
             data_fim TEXT NOT NULL, hora_fim TEXT, dia_inteiro INTEGER DEFAULT 0, local_link TEXT, cliente_id INTEGER, processo_ref TEXT,
-            organizador_id INTEGER NOT NULL, visibilidade TEXT DEFAULT 'Compartilhada', recorrente_origem_id INTEGER, criado_em TEXT,
+            organizador_id INTEGER NOT NULL, recorrente_origem_id INTEGER, criado_em TEXT,
             FOREIGN KEY (cliente_id) REFERENCES contatos(id), FOREIGN KEY (organizador_id) REFERENCES usuarios(id),
             FOREIGN KEY (recorrente_origem_id) REFERENCES compromissos_recorrentes(id) ON DELETE SET NULL
         )
@@ -257,13 +302,12 @@ def delete_usuario(usuario_id):
     conn = get_connection()
     c = conn.cursor()
     c.execute("UPDATE tarefas SET responsavel_id = NULL WHERE responsavel_id = ?", (usuario_id,))
-    c.execute("DELETE FROM tarefas_compartilhadas WHERE usuario_id = ?", (usuario_id,))
     c.execute("DELETE FROM compromissos_participantes WHERE usuario_id = ?", (usuario_id,))
     c.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
     conn.commit()
     conn.close()
 
-# --- Funções: Tabelas de Apoio (CRUDs) ---
+# --- Funções: Tipos de Tarefas (Compartilhados) ---
 def get_tipos_tarefas():
     conn = get_connection()
     df = pd.read_sql_query("SELECT id, nome FROM tipos_tarefas ORDER BY nome ASC", conn)
@@ -285,14 +329,10 @@ def add_tipo_tarefa(nome):
 def update_tipo_tarefa(tipo_id, nome):
     conn = get_connection()
     c = conn.cursor()
-    try:
-        c.execute("UPDATE tipos_tarefas SET nome = ? WHERE id = ?", (nome.strip(), tipo_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+    c.execute("UPDATE tipos_tarefas SET nome = ? WHERE id = ?", (nome.strip(), tipo_id))
+    conn.commit()
+    conn.close()
+    return True
 
 def delete_tipo_tarefa(tipo_id):
     conn = get_connection()
@@ -302,86 +342,7 @@ def delete_tipo_tarefa(tipo_id):
     conn.commit()
     conn.close()
 
-def get_grupos_tarefas_n1():
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT id, nome FROM grupos_tarefas_n1 ORDER BY nome ASC", conn)
-    conn.close()
-    return df
-
-def add_grupo_tarefas_n1(nome):
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO grupos_tarefas_n1 (nome) VALUES (?)", (nome.strip(),))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def update_grupo_tarefas_n1(n1_id, nome):
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("UPDATE grupos_tarefas_n1 SET nome = ? WHERE id = ?", (nome.strip(), n1_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def delete_grupo_tarefas_n1(n1_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE tarefas SET subgrupo_id = NULL WHERE subgrupo_id IN (SELECT id FROM grupos_tarefas_n2 WHERE grupo_n1_id = ?)", (n1_id,))
-    c.execute("DELETE FROM grupos_tarefas_n2 WHERE grupo_n1_id = ?", (n1_id,))
-    c.execute("DELETE FROM grupos_tarefas_n1 WHERE id = ?", (n1_id,))
-    conn.commit()
-    conn.close()
-
-def get_grupos_tarefas_n2():
-    conn = get_connection()
-    df = pd.read_sql_query("""
-        SELECT n2.id, n1.id AS grupo_n1_id, n1.nome AS grupo_n1, n2.nome AS subgrupo_n2, n1.nome || ' ➔ ' || n2.nome AS caminho_completo
-        FROM grupos_tarefas_n2 n2 JOIN grupos_tarefas_n1 n1 ON n2.grupo_n1_id = n1.id ORDER BY n1.nome, n2.nome ASC
-    """, conn)
-    conn.close()
-    return df
-
-def add_grupo_tarefas_n2(grupo_n1_id, nome):
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO grupos_tarefas_n2 (grupo_n1_id, nome) VALUES (?, ?)", (grupo_n1_id, nome.strip()))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def update_grupo_tarefas_n2(n2_id, grupo_n1_id, nome):
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("UPDATE grupos_tarefas_n2 SET grupo_n1_id = ?, nome = ? WHERE id = ?", (grupo_n1_id, nome.strip(), n2_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def delete_grupo_tarefas_n2(n2_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE tarefas SET subgrupo_id = NULL WHERE subgrupo_id = ?", (n2_id,))
-    c.execute("DELETE FROM grupos_tarefas_n2 WHERE id = ?", (n2_id,))
-    conn.commit()
-    conn.close()
-
+# --- Funções: Apoio Financeiro & Contatos ---
 def get_contas_sinteticas(tipo=None):
     conn = get_connection()
     q = "SELECT id, tipo, nome FROM contas_sinteticas" + (f" WHERE tipo = '{tipo}'" if tipo else "") + " ORDER BY tipo, nome ASC"
@@ -404,14 +365,10 @@ def add_conta_sintetica(tipo, nome):
 def update_conta_sintetica(sintetica_id, tipo, nome):
     conn = get_connection()
     c = conn.cursor()
-    try:
-        c.execute("UPDATE contas_sinteticas SET tipo = ?, nome = ? WHERE id = ?", (tipo, nome.strip(), sintetica_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+    c.execute("UPDATE contas_sinteticas SET tipo = ?, nome = ? WHERE id = ?", (tipo, nome.strip(), sintetica_id))
+    conn.commit()
+    conn.close()
+    return True
 
 def delete_conta_sintetica(sintetica_id):
     conn = get_connection()
@@ -452,19 +409,15 @@ def add_conta_analitica(sintetica_id, nome, historico_padrao_id=None):
 def update_conta_analitica(analitica_id, sintetica_id, nome, historico_padrao_id=None):
     conn = get_connection()
     c = conn.cursor()
-    try:
-        c.execute("UPDATE contas_analiticas SET sintetica_id = ?, nome = ?, historico_padrao_id = ? WHERE id = ?", (sintetica_id, nome.strip(), historico_padrao_id, analitica_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+    c.execute("UPDATE contas_analiticas SET sintetica_id = ?, nome = ?, historico_padrao_id = ? WHERE id = ?", (sintetica_id, nome.strip(), historico_padrao_id, analitica_id))
+    conn.commit()
+    conn.close()
+    return True
 
 def delete_conta_analitica(analitica_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE lancamentos SET conta_analitica_id = NULL WHERE conta_analitica_id = ?", (analitica_id,))
+    c.execute("UPDATE lancamentos SET conta_analitica_id = NULL WHERE conta_analitica_id IN (SELECT id FROM contas_analiticas WHERE sintetica_id = ?)", (analitica_id,))
     c.execute("DELETE FROM contas_recorrentes WHERE conta_analitica_id = ?", (analitica_id,))
     c.execute("DELETE FROM regras_classificacao WHERE analitica_id = ?", (analitica_id,))
     c.execute("DELETE FROM contas_analiticas WHERE id = ?", (analitica_id,))
@@ -530,14 +483,10 @@ def add_historico(codigo, descricao, tipo_aplicavel):
 def update_historico(hist_id, codigo, descricao, tipo_aplicavel):
     conn = get_connection()
     c = conn.cursor()
-    try:
-        c.execute("UPDATE historicos_padrao SET codigo = ?, descricao = ?, tipo_aplicavel = ? WHERE id = ?", (codigo.strip().upper(), descricao.strip(), tipo_aplicavel, hist_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+    c.execute("UPDATE historicos_padrao SET codigo = ?, descricao = ?, tipo_aplicavel = ? WHERE id = ?", (codigo.strip().upper(), descricao.strip(), tipo_aplicavel, hist_id))
+    conn.commit()
+    conn.close()
+    return True
 
 def delete_historico(hist_id):
     conn = get_connection()
@@ -673,52 +622,54 @@ def gerar_contas_do_mes(ano, mes):
     conn.close()
     return gerados, ignorados, "Processamento concluído."
 
-# --- Funções: Tarefas & Recorrência ---
+# --- Funções: Tarefas & Recorrência (Regra de Visibilidade por Usuário) ---
 def get_tarefas_df(usuario_logado_id=None):
     conn = get_connection()
     q = """
-        SELECT DISTINCT t.id, t.titulo, tt.nome AS tipo_tarefa, t.tipo_tarefa_id, gn1.nome AS grupo_tarefa, gn2.nome AS subgrupo_tarefa,
-               t.subgrupo_id, t.data_limite, t.prioridade, t.status, u.nome AS responsavel, t.responsavel_id, c.nome AS cliente,
+        SELECT DISTINCT t.id, t.titulo, tt.nome AS tipo_tarefa, t.tipo_tarefa_id,
+               t.data_limite, t.prioridade, t.status, u.nome AS responsavel, t.responsavel_id, c.nome AS cliente,
                t.cliente_id, t.processo_ref, t.descricao, t.visibilidade, t.recorrente_origem_id, criador.nome AS criador, t.criador_id
-        FROM tarefas t LEFT JOIN tipos_tarefas tt ON t.tipo_tarefa_id = tt.id LEFT JOIN grupos_tarefas_n2 gn2 ON t.subgrupo_id = gn2.id
-        LEFT JOIN grupos_tarefas_n1 gn1 ON gn2.grupo_n1_id = gn1.id LEFT JOIN usuarios u ON t.responsavel_id = u.id
-        LEFT JOIN usuarios criador ON t.criador_id = criador.id LEFT JOIN contatos c ON t.cliente_id = c.id
-        LEFT JOIN tarefas_compartilhadas tc ON t.id = tc.tarefa_id
+        FROM tarefas t 
+        LEFT JOIN tipos_tarefas tt ON t.tipo_tarefa_id = tt.id 
+        LEFT JOIN usuarios u ON t.responsavel_id = u.id
+        LEFT JOIN usuarios criador ON t.criador_id = criador.id 
+        LEFT JOIN contatos c ON t.cliente_id = c.id
     """
     params = ()
     if usuario_logado_id:
-        q += " WHERE (t.visibilidade = 'Compartilhada' OR t.criador_id = ? OR t.responsavel_id = ? OR tc.usuario_id = ?)"
-        params = (usuario_logado_id, usuario_logado_id, usuario_logado_id)
+        q += """
+            WHERE (
+                t.visibilidade = 'Pública' 
+                OR t.criador_id = ? 
+                OR t.responsavel_id = ?
+            )
+        """
+        params = (usuario_logado_id, usuario_logado_id)
     q += " ORDER BY t.data_limite ASC"
     df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
 
-def add_tarefa(titulo, descricao, data_limite, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade, usuarios_compartilhados=None, recorrente_origem_id=None):
+def add_tarefa(titulo, descricao, data_limite, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade="Pública", recorrente_origem_id=None):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO tarefas (titulo, descricao, data_limite, prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade, recorrente_origem_id, criado_em)
-        VALUES (?, ?, ?, ?, 'Não Iniciada', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (titulo, descricao, str(data_limite), prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade, recorrente_origem_id, str(date.today())))
+        INSERT INTO tarefas (titulo, descricao, data_limite, prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade, recorrente_origem_id, criado_em)
+        VALUES (?, ?, ?, ?, 'Não Iniciada', ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (titulo, descricao, str(data_limite), prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade, recorrente_origem_id, str(date.today())))
     tid = c.lastrowid
-    if visibilidade == "Compartilhada" and usuarios_compartilhados:
-        for uid in usuarios_compartilhados:
-            c.execute("INSERT OR IGNORE INTO tarefas_compartilhadas (tarefa_id, usuario_id) VALUES (?, ?)", (tid, uid))
     conn.commit()
     conn.close()
     return tid
 
-def update_tarefa(tarefa_id, titulo, descricao, data_limite, prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, visibilidade, usuarios_compartilhados=None):
+def update_tarefa(tarefa_id, titulo, descricao, data_limite, prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, visibilidade):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        UPDATE tarefas SET titulo = ?, descricao = ?, data_limite = ?, prioridade = ?, status = ?, responsavel_id = ?, cliente_id = ?, processo_ref = ?, tipo_tarefa_id = ?, subgrupo_id = ?, visibilidade = ? WHERE id = ?
-    """, (titulo, descricao, str(data_limite), prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, visibilidade, tarefa_id))
-    c.execute("DELETE FROM tarefas_compartilhadas WHERE tarefa_id = ?", (tarefa_id,))
-    if visibilidade == "Compartilhada" and usuarios_compartilhados:
-        for uid in usuarios_compartilhados:
-            c.execute("INSERT OR IGNORE INTO tarefas_compartilhadas (tarefa_id, usuario_id) VALUES (?, ?)", (tarefa_id, uid))
+        UPDATE tarefas 
+        SET titulo = ?, descricao = ?, data_limite = ?, prioridade = ?, status = ?, responsavel_id = ?, cliente_id = ?, processo_ref = ?, tipo_tarefa_id = ?, visibilidade = ?
+        WHERE id = ?
+    """, (titulo, descricao, str(data_limite), prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, visibilidade, tarefa_id))
     conn.commit()
     conn.close()
     if "Concluíd" in status:
@@ -727,34 +678,47 @@ def update_tarefa(tarefa_id, titulo, descricao, data_limite, prioridade, status,
 def delete_tarefa(tarefa_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM tarefas_compartilhadas WHERE tarefa_id = ?", (tarefa_id,))
     c.execute("DELETE FROM tarefas WHERE id = ?", (tarefa_id,))
     conn.commit()
     conn.close()
 
-def get_tarefas_recorrentes():
+def get_tarefas_recorrentes(usuario_logado_id=None):
     conn = get_connection()
-    df = pd.read_sql_query("""
+    q = """
         SELECT tr.id, tr.titulo, tr.frequencia, tr.intervalo, tr.data_inicio, tr.proxima_execucao, tr.prioridade, tr.visibilidade, tr.ativo,
                u.nome AS responsavel, tr.responsavel_id, c.nome AS cliente, tr.cliente_id, tt.nome AS tipo_tarefa, tr.tipo_tarefa_id,
-               gn2.nome AS subgrupo_tarefa, tr.subgrupo_id, tr.descricao, tr.processo_ref
-        FROM tarefas_recorrentes tr LEFT JOIN usuarios u ON tr.responsavel_id = u.id LEFT JOIN contatos c ON tr.cliente_id = c.id
-        LEFT JOIN tipos_tarefas tt ON tr.tipo_tarefa_id = tt.id LEFT JOIN grupos_tarefas_n2 gn2 ON tr.subgrupo_id = gn2.id ORDER BY tr.proxima_execucao ASC
-    """, conn)
+               tr.descricao, tr.processo_ref, tr.criador_id
+        FROM tarefas_recorrentes tr 
+        LEFT JOIN usuarios u ON tr.responsavel_id = u.id 
+        LEFT JOIN contatos c ON tr.cliente_id = c.id
+        LEFT JOIN tipos_tarefas tt ON tr.tipo_tarefa_id = tt.id 
+    """
+    params = ()
+    if usuario_logado_id:
+        q += """
+            WHERE (
+                tr.visibilidade = 'Pública' 
+                OR tr.criador_id = ? 
+                OR tr.responsavel_id = ?
+            )
+        """
+        params = (usuario_logado_id, usuario_logado_id)
+    q += " ORDER BY tr.proxima_execucao ASC"
+    df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
 
-def add_tarefa_recorrente(titulo, descricao, frequencia, intervalo, data_inicio, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade):
+def add_tarefa_recorrente(titulo, descricao, frequencia, intervalo, data_inicio, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade="Pública"):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO tarefas_recorrentes (titulo, descricao, frequencia, intervalo, data_inicio, proxima_execucao, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade, ativo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    """, (titulo, descricao, frequencia, intervalo, str(data_inicio), str(data_inicio), prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade))
+        INSERT INTO tarefas_recorrentes (titulo, descricao, frequencia, intervalo, data_inicio, proxima_execucao, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade, ativo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    """, (titulo, descricao, frequencia, intervalo, str(data_inicio), str(data_inicio), prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade))
     rid = c.lastrowid
     conn.commit()
     conn.close()
-    add_tarefa(titulo, descricao, data_inicio, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade, recorrente_origem_id=rid)
+    add_tarefa(titulo, descricao, data_inicio, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade=visibilidade, recorrente_origem_id=rid)
     return rid
 
 def delete_tarefa_recorrente(rec_id):
@@ -774,7 +738,7 @@ def processar_conclusao_recorrente(tarefa_id):
         return
     rid = row[0]
     dt_base = parse_data_iso(row[1])
-    c.execute("SELECT frequencia, intervalo, ativo, titulo, descricao, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade FROM tarefas_recorrentes WHERE id = ?", (rid,))
+    c.execute("SELECT frequencia, intervalo, ativo, titulo, descricao, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade FROM tarefas_recorrentes WHERE id = ?", (rid,))
     regra = c.fetchone()
     if not regra or regra[2] != 1:
         conn.close()
@@ -783,73 +747,66 @@ def processar_conclusao_recorrente(tarefa_id):
     c.execute("UPDATE tarefas_recorrentes SET proxima_execucao = ? WHERE id = ?", (str(nova_dt), rid))
     conn.commit()
     conn.close()
-    add_tarefa(regra[3], regra[4], nova_dt, regra[5], regra[6], regra[7], regra[8], regra[9], regra[10], regra[11], regra[12], recorrente_origem_id=rid)
+    add_tarefa(regra[3], regra[4], nova_dt, regra[5], regra[6], regra[7], regra[8], regra[9], regra[10], visibilidade=regra[11], recorrente_origem_id=rid)
 
 def sincronizar_tarefas_recorrentes():
     conn = get_connection()
     hoje = str(date.today())
     c = conn.cursor()
-    c.execute("SELECT id, titulo, descricao, frequencia, intervalo, proxima_execucao, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade FROM tarefas_recorrentes WHERE ativo = 1 AND proxima_execucao <= ?", (hoje,))
+    c.execute("SELECT id, titulo, descricao, frequencia, intervalo, proxima_execucao, prioridade, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade FROM tarefas_recorrentes WHERE ativo = 1 AND proxima_execucao <= ?", (hoje,))
     recs = c.fetchall()
     criados = 0
     for r in recs:
         c.execute("SELECT COUNT(*) FROM tarefas WHERE recorrente_origem_id = ? AND data_limite = ?", (r[0], r[5]))
         if c.fetchone()[0] == 0:
             c.execute("""
-                INSERT INTO tarefas (titulo, descricao, data_limite, prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, subgrupo_id, criador_id, visibilidade, recorrente_origem_id, criado_em)
-                VALUES (?, ?, ?, ?, 'Não Iniciada', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (r[1], r[2], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[0], hoje))
+                INSERT INTO tarefas (titulo, descricao, data_limite, prioridade, status, responsavel_id, cliente_id, processo_ref, tipo_tarefa_id, criador_id, visibilidade, recorrente_origem_id, criado_em)
+                VALUES (?, ?, ?, ?, 'Não Iniciada', ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (r[1], r[2], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[0], hoje))
             criados += 1
     conn.commit()
     conn.close()
     return criados
 
 # --- Funções: Agenda & Recorrência ---
-def get_compromissos_df(usuario_logado_id=None):
+def get_compromissos_df():
     conn = get_connection()
     q = """
         SELECT DISTINCT cp.id, cp.titulo, cp.data_inicio, cp.hora_inicio, cp.data_fim, cp.hora_fim, cp.dia_inteiro, cp.local_link, cp.descricao,
-               u.nome AS organizador, cp.organizador_id, c.nome AS cliente, cp.cliente_id, cp.processo_ref, cp.visibilidade, cp.recorrente_origem_id
-        FROM compromissos cp LEFT JOIN usuarios u ON cp.organizador_id = u.id LEFT JOIN contatos c ON cp.cliente_id = c.id
-        LEFT JOIN compromissos_participantes cpp ON cp.id = cpp.compromisso_id
+               u.nome AS organizador, cp.organizador_id, c.nome AS cliente, cp.cliente_id, cp.processo_ref, cp.recorrente_origem_id
+        FROM compromissos cp 
+        LEFT JOIN usuarios u ON cp.organizador_id = u.id 
+        LEFT JOIN contatos c ON cp.cliente_id = c.id
+        ORDER BY cp.data_inicio ASC, cp.hora_inicio ASC
     """
-    params = ()
-    if usuario_logado_id:
-        q += " WHERE (cp.visibilidade = 'Compartilhada' OR cp.organizador_id = ? OR cpp.usuario_id = ?)"
-        params = (usuario_logado_id, usuario_logado_id)
-    q += " ORDER BY cp.data_inicio ASC, cp.hora_inicio ASC"
-    df = pd.read_sql_query(q, conn, params=params)
+    df = pd.read_sql_query(q, conn)
     conn.close()
     return df
 
-def add_compromisso(titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, visibilidade, participantes_ids=None, recorrente_origem_id=None):
+def add_compromisso(titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, recorrente_origem_id=None):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO compromissos (titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, visibilidade, recorrente_origem_id, criado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (titulo, descricao, str(data_inicio), str(hora_inicio) if not dia_inteiro else None, str(data_fim), str(hora_fim) if not dia_inteiro else None, 1 if dia_inteiro else 0, local_link, cliente_id, processo_ref, organizador_id, visibilidade, recorrente_origem_id, str(date.today())))
+        INSERT INTO compromissos (titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, recorrente_origem_id, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (titulo, descricao, str(data_inicio), str(hora_inicio) if not dia_inteiro else None, str(data_fim), str(hora_fim) if not dia_inteiro else None, 1 if dia_inteiro else 0, local_link, cliente_id, processo_ref, organizador_id, recorrente_origem_id, str(date.today())))
     cid = c.lastrowid
-    if participantes_ids:
-        for uid in participantes_ids:
-            c.execute("INSERT OR IGNORE INTO compromissos_participantes (compromisso_id, usuario_id) VALUES (?, ?)", (cid, uid))
     conn.commit()
     conn.close()
     return cid
 
-def update_compromisso(comp_id, titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, visibilidade):
+def update_compromisso(comp_id, titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        UPDATE compromissos SET titulo = ?, descricao = ?, data_inicio = ?, hora_inicio = ?, data_fim = ?, hora_fim = ?, dia_inteiro = ?, local_link = ?, cliente_id = ?, processo_ref = ?, visibilidade = ? WHERE id = ?
-    """, (titulo, descricao, str(data_inicio), str(hora_inicio) if not dia_inteiro else None, str(data_fim), str(hora_fim) if not dia_inteiro else None, 1 if dia_inteiro else 0, local_link, cliente_id, processo_ref, visibilidade, comp_id))
+        UPDATE compromissos SET titulo = ?, descricao = ?, data_inicio = ?, hora_inicio = ?, data_fim = ?, hora_fim = ?, dia_inteiro = ?, local_link = ?, cliente_id = ?, processo_ref = ? WHERE id = ?
+    """, (titulo, descricao, str(data_inicio), str(hora_inicio) if not dia_inteiro else None, str(data_fim), str(hora_fim) if not dia_inteiro else None, 1 if dia_inteiro else 0, local_link, cliente_id, processo_ref, comp_id))
     conn.commit()
     conn.close()
 
 def delete_compromisso(comp_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM compromissos_participantes WHERE compromisso_id = ?", (comp_id,))
     c.execute("DELETE FROM compromissos WHERE id = ?", (comp_id,))
     conn.commit()
     conn.close()
@@ -858,37 +815,37 @@ def get_compromissos_recorrentes():
     conn = get_connection()
     df = pd.read_sql_query("""
         SELECT cr.id, cr.titulo, cr.frequencia, cr.intervalo, cr.data_inicio, cr.hora_inicio, cr.duracao_minutos, cr.dia_inteiro, cr.local_link,
-               cr.descricao, u.nome AS organizador, cr.organizador_id, c.nome AS cliente, cr.cliente_id, cr.processo_ref, cr.visibilidade, cr.ativo
+               cr.descricao, u.nome AS organizador, cr.organizador_id, c.nome AS cliente, cr.cliente_id, cr.processo_ref, cr.ativo
         FROM compromissos_recorrentes cr LEFT JOIN usuarios u ON cr.organizador_id = u.id LEFT JOIN contatos c ON cr.cliente_id = c.id ORDER BY cr.data_inicio ASC
     """, conn)
     conn.close()
     return df
 
-def add_compromisso_recorrente(titulo, descricao, frequencia, intervalo, data_inicio, hora_inicio, duracao_minutos, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, visibilidade, participantes_ids=None):
+def add_compromisso_recorrente(titulo, descricao, frequencia, intervalo, data_inicio, hora_inicio, duracao_minutos, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO compromissos_recorrentes (titulo, descricao, frequencia, intervalo, data_inicio, hora_inicio, duracao_minutos, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, visibilidade, ativo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    """, (titulo, descricao, frequencia, max(1, int(intervalo or 1)), str(data_inicio), str(hora_inicio) if not dia_inteiro else None, duracao_minutos, 1 if dia_inteiro else 0, local_link, cliente_id, processo_ref, organizador_id, visibilidade))
+        INSERT INTO compromissos_recorrentes (titulo, descricao, frequencia, intervalo, data_inicio, hora_inicio, duracao_minutos, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, ativo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    """, (titulo, descricao, frequencia, max(1, int(intervalo or 1)), str(data_inicio), str(hora_inicio) if not dia_inteiro else None, duracao_minutos, 1 if dia_inteiro else 0, local_link, cliente_id, processo_ref, organizador_id))
     rid = c.lastrowid
     conn.commit()
     conn.close()
-    gerar_ocorrencias_compromisso_recorrente(rid, data_inicio, dias_a_frente=60, participantes_ids=participantes_ids)
+    gerar_ocorrencias_compromisso_recorrente(rid, data_inicio, dias_a_frente=60)
     return rid
 
-def gerar_ocorrencias_compromisso_recorrente(rec_id, data_base: date, dias_a_frente: int = 60, participantes_ids=None):
+def gerar_ocorrencias_compromisso_recorrente(rec_id, data_base: date, dias_a_frente: int = 60):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        SELECT titulo, descricao, frequencia, intervalo, hora_inicio, duracao_minutos, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, visibilidade, ativo
+        SELECT titulo, descricao, frequencia, intervalo, hora_inicio, duracao_minutos, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, ativo
         FROM compromissos_recorrentes WHERE id = ?
     """, (rec_id,))
     row = c.fetchone()
-    if not row or row[12] != 1:
+    if not row or row[11] != 1:
         conn.close()
         return
-    tit, desc, freq, interv, h_ini, dur_min, dia_int, local_l, cli_id, proc, org_id, vis, ativo = row
+    tit, desc, freq, interv, h_ini, dur_min, dia_int, local_l, cli_id, proc, org_id, ativo = row
     limite = date.today() + timedelta(days=dias_a_frente)
     cur = data_base
     iter_seguranca = 0
@@ -905,13 +862,9 @@ def gerar_ocorrencias_compromisso_recorrente(rec_id, data_base: date, dias_a_fre
             else:
                 d_fim, h_fim = cur, None
             c.execute("""
-                INSERT INTO compromissos (titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, visibilidade, recorrente_origem_id, criado_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (tit, desc, str(cur), h_ini if not dia_int else None, str(d_fim), h_fim, dia_int, local_l, cli_id, proc, org_id, vis, rec_id, str(date.today())))
-            cid = c.lastrowid
-            if participantes_ids:
-                for uid in participantes_ids:
-                    c.execute("INSERT OR IGNORE INTO compromissos_participantes (compromisso_id, usuario_id) VALUES (?, ?)", (cid, uid))
+                INSERT INTO compromissos (titulo, descricao, data_inicio, hora_inicio, data_fim, hora_fim, dia_inteiro, local_link, cliente_id, processo_ref, organizador_id, recorrente_origem_id, criado_em)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (tit, desc, str(cur), h_ini if not dia_int else None, str(d_fim), h_fim, dia_int, local_l, cli_id, proc, org_id, rec_id, str(date.today())))
         prox = calcular_proxima_data(cur, freq, max(1, int(interv or 1)))
         if prox <= cur:
             prox = cur + timedelta(days=1)
@@ -1172,7 +1125,7 @@ if chave_modulo_ativo == "financeiro":
             st.dataframe(get_regras_classificacao(), use_container_width=True)
 
 # ====================================================
-# MÓDULO 2: GESTÃO DE TAREFAS
+# MÓDULO 2: GESTÃO DE TAREFAS (REGRA DE VISIBILIDADE)
 # ====================================================
 elif chave_modulo_ativo == "tarefas":
     st.title("✅ Fabíola Guimarães Advocacia — Gestão de Tarefas")
@@ -1187,7 +1140,7 @@ elif chave_modulo_ativo == "tarefas":
                 st.rerun()
         df_tar = get_tarefas_df(operador_atual_id)
         if df_tar.empty:
-            st.info("Nenhuma tarefa cadastrada.")
+            st.info("Nenhuma tarefa visível para o seu usuário no momento.")
         else:
             col1, col2, col3 = st.columns(3)
             st_f = col1.multiselect("Status", ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"], default=["Não Iniciada", "Em Andamento"])
@@ -1198,74 +1151,94 @@ elif chave_modulo_ativo == "tarefas":
             df_fil = df_tar[(df_tar["status"].isin(st_f)) & (df_tar["prioridade"].isin(pr_f))]
             if resp_f != "Todos":
                 df_fil = df_fil[df_fil["responsavel"] == resp_f]
-            df_v = df_fil[["id", "titulo", "status", "prioridade", "data_limite", "responsavel", "tipo_tarefa", "grupo_tarefa", "subgrupo_tarefa", "cliente", "processo_ref"]].copy()
+            df_v = df_fil[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref", "descricao"]].copy()
             df_v["data_limite"] = df_v["data_limite"].apply(formatar_data_br)
             st.dataframe(df_v, use_container_width=True)
 
     with tab_n:
         st.markdown("#### Criar Nova Tarefa")
-        tipos_df = get_tipos_tarefas()
-        subg_df = get_grupos_tarefas_n2()
         u_df = get_usuarios(True)
         cli_df = get_contatos("Cliente")
-        if tipos_df.empty or subg_df.empty:
-            st.warning("Cadastre Grupos/Subgrupos e Tipos de Tarefas em 'Manutenção de Tabelas'.")
+        tipos_df = get_tipos_tarefas()
+        if u_df.empty:
+            st.warning("Cadastre usuários primeiro.")
+        elif tipos_df.empty:
+            st.warning("Cadastre ao menos um Tipo de Tarefa em '🛠️ Manutenção de Tabelas'.")
         else:
-            m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
-            m_subg = dict(zip(subg_df["caminho_completo"], subg_df["id"]))
-            m_u = dict(zip(u_df["nome"], u_df["id"])) if not u_df.empty else {}
+            m_u = dict(zip(u_df["nome"], u_df["id"]))
             m_cli = {"(Nenhum)": None}
             if not cli_df.empty:
                 m_cli.update(dict(zip(cli_df["nome"], cli_df["id"])))
+            m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
+
             with st.form("form_nova_tarefa", clear_on_submit=True):
                 c1, c2 = st.columns(2)
                 tit = c1.text_input("Título da Tarefa")
                 dt_l = c2.date_input("Prazo Limite", value=date.today(), format="DD/MM/YYYY")
-                tipo_s = c1.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
-                subg_s = c2.selectbox("Grupo / Subgrupo", list(m_subg.keys()))
+                
+                resp_keys = list(m_u.keys())
+                def_idx = resp_keys.index(operador_atual_nome) if operador_atual_nome in resp_keys else 0
+                resp_s = c1.selectbox("Responsável", resp_keys, index=def_idx)
+                tipo_s = c2.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
+                
                 prio_s = c1.selectbox("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], index=1)
-                resp_s = c2.selectbox("Responsável", list(m_u.keys()))
-                cli_s = c1.selectbox("Cliente", list(m_cli.keys()))
-                proc = c2.text_input("Processo (Opcional)")
-                desc = st.text_area("Descrição")
-                vis = st.radio("Visibilidade", ["Compartilhada", "Privada"], horizontal=True)
+                cli_s = c2.selectbox("Cliente", list(m_cli.keys()))
+                
+                c3, c4 = st.columns(2)
+                vis_s = c3.selectbox(
+                    "Visibilidade da Tarefa",
+                    ["Pública (Visível a todos)", "Privada / Restrita"],
+                    index=0,
+                    help="Tarefas Públicas são vistas por todos. Tarefas Privadas/Restritas são vistas apenas pelo Criador e pelo Responsável."
+                )
+                proc = c4.text_input("Processo (Opcional)")
+                
+                desc = st.text_area("Descrição / Instruções")
+                
                 if st.form_submit_button("Salvar Tarefa", type="primary"):
                     if tit.strip():
-                        add_tarefa(tit.strip(), desc.strip(), dt_l, prio_s, m_u[resp_s], m_cli[cli_s], proc.strip(), m_tipos[tipo_s], m_subg[subg_s], operador_atual_id, vis)
-                        st.success("Tarefa cadastrada!")
+                        val_vis = "Pública" if "Pública" in vis_s else "Privada"
+                        add_tarefa(tit.strip(), desc.strip(), dt_l, prio_s, m_u[resp_s], m_cli[cli_s], proc.strip(), m_tipos[tipo_s], operador_atual_id, visibilidade=val_vis)
+                        st.success("Tarefa cadastrada com sucesso!")
                         st.rerun()
+                    else:
+                        st.warning("Informe o título da tarefa.")
 
     with tab_rec:
         st.markdown("#### Tarefas Recorrentes (Rotinas Periódicas)")
         t_rec_in, t_rec_ls = st.tabs(["➕ Nova Regra", "📋 Regras Ativas"])
         with t_rec_in:
-            tipos_df = get_tipos_tarefas()
-            subg_df = get_grupos_tarefas_n2()
             u_df = get_usuarios(True)
-            if not tipos_df.empty and not subg_df.empty:
-                m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
-                m_subg = dict(zip(subg_df["caminho_completo"], subg_df["id"]))
+            tipos_df = get_tipos_tarefas()
+            if not u_df.empty and not tipos_df.empty:
                 m_u = dict(zip(u_df["nome"], u_df["id"]))
+                m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
                 with st.form("form_inc_tar_rec", clear_on_submit=True):
                     c1, c2, c3 = st.columns(3)
                     tit_r = c1.text_input("Título da Rotina")
                     freq_r = c2.selectbox("Frequência", ["Semanal", "Diária", "Mensal", "Anual"], index=0)
                     dt_ini_r = c3.date_input("Início", value=date.today(), format="DD/MM/YYYY")
-                    tipo_sr = c1.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
-                    subg_sr = c2.selectbox("Grupo / Subgrupo", list(m_subg.keys()))
-                    resp_sr = c3.selectbox("Responsável", list(m_u.keys()))
-                    desc_r = st.text_area("Instruções")
+                    
+                    c4, c5, c6 = st.columns(3)
+                    tipo_sr = c4.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
+                    resp_sr = c5.selectbox("Responsável", list(m_u.keys()))
+                    vis_sr = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=0)
+                    
+                    desc_r = st.text_area("Instruções da Rotina")
                     if st.form_submit_button("Criar Regra Recorrente"):
                         if tit_r.strip():
-                            add_tarefa_recorrente(tit_r.strip(), desc_r.strip(), freq_r, 1, dt_ini_r, "Média", m_u[resp_sr], None, "", m_tipos[tipo_sr], m_subg[subg_sr], operador_atual_id, "Compartilhada")
-                            st.success("Regra criada!")
+                            val_vis_r = "Pública" if "Pública" in vis_sr else "Privada"
+                            add_tarefa_recorrente(tit_r.strip(), desc_r.strip(), freq_r, 1, dt_ini_r, "Média", m_u[resp_sr], None, "", m_tipos[tipo_sr], operador_atual_id, visibilidade=val_vis_r)
+                            st.success("Regra criada com sucesso!")
                             st.rerun()
+                        else:
+                            st.warning("Informe o título da rotina.")
         with t_rec_ls:
-            df_recs = get_tarefas_recorrentes()
+            df_recs = get_tarefas_recorrentes(operador_atual_id)
             if df_recs.empty:
-                st.info("Nenhuma rotina cadastrada.")
+                st.info("Nenhuma rotina recorrente cadastrada ou visível.")
             else:
-                st.dataframe(df_recs[["id", "titulo", "frequencia", "proxima_execucao", "responsavel", "subgrupo_tarefa"]], use_container_width=True)
+                st.dataframe(df_recs[["id", "titulo", "tipo_tarefa", "visibilidade", "frequencia", "proxima_execucao", "responsavel"]], use_container_width=True)
                 r_map = {f"ID {r['id']} | {r['titulo']}": r['id'] for _, r in df_recs.iterrows()}
                 d_rid = r_map[st.selectbox("Excluir Regra", list(r_map.keys()))]
                 if st.button("🗑️ Excluir Regra de Recorrência", type="primary"):
@@ -1309,7 +1282,7 @@ elif chave_modulo_ativo == "tarefas":
                 df_rf = df_rf[df_rf["responsavel"] == pf_resp]
 
             st.metric("Total de Tarefas Filtradas", len(df_rf))
-            df_rf_view = df_rf[["id", "titulo", "status", "prioridade", "data_limite", "responsavel", "tipo_tarefa", "grupo_tarefa", "subgrupo_tarefa", "cliente", "processo_ref"]].copy()
+            df_rf_view = df_rf[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref"]].copy()
             df_rf_view["data_limite"] = df_rf_view["data_limite"].apply(formatar_data_br)
             st.dataframe(df_rf_view, use_container_width=True)
             st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
@@ -1319,20 +1292,54 @@ elif chave_modulo_ativo == "tarefas":
         if df_tar_all.empty:
             st.info("Nenhuma tarefa para gerenciar.")
         else:
-            t_map = {f"ID {r['id']} | [{r['status']}] {r['titulo']} (Prazo: {formatar_data_br(r['data_limite'])})": r['id'] for _, r in df_tar_all.iterrows()}
+            t_map = {f"ID {r['id']} | [{r['status']}] {r['titulo']} ({r['responsavel']})": r['id'] for _, r in df_tar_all.iterrows()}
             tar_id = t_map[st.selectbox("Selecione a Tarefa", list(t_map.keys()))]
             item_t = df_tar_all[df_tar_all["id"] == tar_id].iloc[0]
+            
+            tipos_tar = get_tipos_tarefas()
+            m_tipos_e = dict(zip(tipos_tar["nome"], tipos_tar["id"])) if not tipos_tar.empty else {}
+            u_df = get_usuarios(True)
+            m_u_e = dict(zip(u_df["nome"], u_df["id"])) if not u_df.empty else {}
+            cli_df = get_contatos("Cliente")
+            m_cli_e = {"(Nenhum)": None}
+            if not cli_df.empty:
+                m_cli_e.update(dict(zip(cli_df["nome"], cli_df["id"])))
+
             with st.form("form_edit_tar"):
                 c1, c2 = st.columns(2)
                 t_tit = c1.text_input("Título", value=item_t["titulo"])
                 t_dt = c2.date_input("Prazo Limite", value=parse_data_iso(item_t["data_limite"]), format="DD/MM/YYYY")
+                
+                tp_keys = list(m_tipos_e.keys())
+                tp_idx = list(m_tipos_e.values()).index(item_t["tipo_tarefa_id"]) if item_t["tipo_tarefa_id"] in list(m_tipos_e.values()) else 0
+                t_tp_s = c1.selectbox("Tipo de Tarefa", tp_keys, index=tp_idx) if tp_keys else c1.selectbox("Tipo", ["(Sem tipos)"])
+                
+                u_keys = list(m_u_e.keys())
+                u_idx = list(m_u_e.values()).index(item_t["responsavel_id"]) if item_t["responsavel_id"] in list(m_u_e.values()) else 0
+                t_u_s = c2.selectbox("Responsável", u_keys, index=u_idx) if u_keys else None
+
+                c3, c4 = st.columns(2)
                 st_list = ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"]
-                t_st = c1.selectbox("Status", st_list, index=st_list.index(item_t["status"]) if item_t["status"] in st_list else 0)
+                t_st = c3.selectbox("Status", st_list, index=st_list.index(item_t["status"]) if item_t["status"] in st_list else 0)
                 pr_list = ["Baixa", "Média", "Alta", "Urgente"]
-                t_pr = c2.selectbox("Prioridade", pr_list, index=pr_list.index(item_t["prioridade"]) if item_t["prioridade"] in pr_list else 1)
+                t_pr = c4.selectbox("Prioridade", pr_list, index=pr_list.index(item_t["prioridade"]) if item_t["prioridade"] in pr_list else 1)
+                
+                c5, c6 = st.columns(2)
+                cli_keys = list(m_cli_e.keys())
+                cli_idx = list(m_cli_e.values()).index(item_t["cliente_id"]) if item_t["cliente_id"] in list(m_cli_e.values()) else 0
+                t_cli_s = c5.selectbox("Cliente", cli_keys, index=cli_idx)
+                
+                vis_atual_idx = 0 if item_t["visibilidade"] == "Pública" else 1
+                t_vis_edit = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=vis_atual_idx)
+
+                t_proc = st.text_input("Processo", value=item_t["processo_ref"] if pd.notna(item_t["processo_ref"]) else "")
                 t_desc = st.text_area("Descrição", value=item_t["descricao"] if pd.notna(item_t["descricao"]) else "")
+                
                 if st.form_submit_button("Atualizar Tarefa"):
-                    update_tarefa(tar_id, t_tit.strip(), t_desc.strip(), t_dt, t_pr, t_st, item_t["responsavel_id"], item_t["cliente_id"], item_t["processo_ref"], item_t["tipo_tarefa_id"], item_t["subgrupo_id"], item_t["visibilidade"])
+                    novo_tp_id = m_tipos_e.get(t_tp_s, item_t["tipo_tarefa_id"])
+                    novo_u_id = m_u_e.get(t_u_s, item_t["responsavel_id"])
+                    novo_vis_val = "Pública" if "Pública" in t_vis_edit else "Privada"
+                    update_tarefa(tar_id, t_tit.strip(), t_desc.strip(), t_dt, t_pr, t_st, novo_u_id, m_cli_e[t_cli_s], t_proc.strip(), novo_tp_id, novo_vis_val)
                     st.success("Tarefa atualizada!")
                     st.rerun()
             if st.button("🗑️ Excluir Tarefa", type="primary"):
@@ -1341,7 +1348,7 @@ elif chave_modulo_ativo == "tarefas":
                 st.rerun()
 
 # ====================================================
-# MÓDULO 3: AGENDA DE COMPROMISSOS (COM RECORRÊNCIA)
+# MÓDULO 3: AGENDA DE COMPROMISSOS (BASE COMPARTILHADA)
 # ====================================================
 elif chave_modulo_ativo == "agenda":
     st.title("📅 Fabíola Guimarães Advocacia — Agenda de Compromissos")
@@ -1354,7 +1361,7 @@ elif chave_modulo_ativo == "agenda":
                 sincronizar_todos_compromissos_recorrentes()
                 st.success("Ocorrências atualizadas!")
                 st.rerun()
-        df_cp = get_compromissos_df(operador_atual_id)
+        df_cp = get_compromissos_df()
         if df_cp.empty:
             st.info("Nenhum compromisso agendado.")
         else:
@@ -1384,7 +1391,7 @@ elif chave_modulo_ativo == "agenda":
             c_desc = st.text_area("Anotações")
             if st.form_submit_button("Salvar Compromisso", type="primary"):
                 if c_tit.strip():
-                    add_compromisso(c_tit.strip(), c_desc.strip(), d_ini, h_ini.strftime("%H:%M"), d_fim, h_fim.strftime("%H:%M"), 0, c_loc.strip(), m_cli[c_cli], c_proc.strip(), operador_atual_id, "Compartilhada")
+                    add_compromisso(c_tit.strip(), c_desc.strip(), d_ini, h_ini.strftime("%H:%M"), d_fim, h_fim.strftime("%H:%M"), 0, c_loc.strip(), m_cli[c_cli], c_proc.strip(), operador_atual_id)
                     st.success("Compromisso salvo!")
                     st.rerun()
 
@@ -1403,7 +1410,7 @@ elif chave_modulo_ativo == "agenda":
                 cr_loc = st.text_input("Local / Link")
                 if st.form_submit_button("Criar Regra de Repetição"):
                     if cr_tit.strip():
-                        add_compromisso_recorrente(cr_tit.strip(), "", cr_freq, 1, cr_dt, cr_hr.strftime("%H:%M"), int(cr_dur), 0, cr_loc.strip(), None, "", operador_atual_id, "Compartilhada")
+                        add_compromisso_recorrente(cr_tit.strip(), "", cr_freq, 1, cr_dt, cr_hr.strftime("%H:%M"), int(cr_dur), 0, cr_loc.strip(), None, "", operador_atual_id)
                         st.success("Regra criada e ocorrências geradas!")
                         st.rerun()
         with t_cr_ls:
@@ -1420,7 +1427,7 @@ elif chave_modulo_ativo == "agenda":
                     st.rerun()
 
     with t_g:
-        df_cp_all = get_compromissos_df(operador_atual_id)
+        df_cp_all = get_compromissos_df()
         if df_cp_all.empty:
             st.info("Nenhum compromisso para alterar.")
         else:
@@ -1435,7 +1442,7 @@ elif chave_modulo_ativo == "agenda":
                 ce_hr = c2.time_input("Hora", value=parse_hora_str(item_c["hora_inicio"]))
                 ce_desc = st.text_area("Descrição", value=item_c["descricao"] if pd.notna(item_c["descricao"]) else "")
                 if st.form_submit_button("Atualizar"):
-                    update_compromisso(comp_id, ce_tit.strip(), ce_desc.strip(), ce_dt, ce_hr.strftime("%H:%M"), ce_dt, ce_hr.strftime("%H:%M"), 0, ce_loc.strip(), item_c["cliente_id"], item_c["processo_ref"], item_c["visibilidade"])
+                    update_compromisso(comp_id, ce_tit.strip(), ce_desc.strip(), ce_dt, ce_hr.strftime("%H:%M"), ce_dt, ce_hr.strftime("%H:%M"), 0, ce_loc.strip(), item_c["cliente_id"], item_c["processo_ref"])
                     st.success("Atualizado!")
                     st.rerun()
             if st.button("🗑️ Excluir Compromisso", type="primary"):
@@ -1444,26 +1451,28 @@ elif chave_modulo_ativo == "agenda":
                 st.rerun()
 
 # ====================================================
-# MÓDULO 4: MANUTENÇÃO DE TABELAS (CRUDs COMPLETOS)
+# MÓDULO 4: MANUTENÇÃO DE TABELAS (CRUDs GERAIS)
 # ====================================================
 elif chave_modulo_ativo == "tabelas":
     st.title("🛠️ Manutenção de Tabelas e Cadastros")
     st.markdown("Gerencie centralizadamente todas as tabelas de apoio do escritório.")
     
-    t_tipos, t_grupos, t_plano, t_hist, t_cont, t_regras = st.tabs([
-        "🏷️ Tipos de Tarefas", "📂 Grupos de Tarefas (2 Níveis)", "🌳 Plano de Contas", "📑 Históricos Padrão", "👥 Clientes e Fornecedores", "⚙️ Regras de Classificação"
+    t_tipos, t_plano, t_hist, t_cont, t_regras = st.tabs([
+        "🏷️ Tipos de Tarefas", "🌳 Plano de Contas", "📑 Históricos Padrão", "👥 Clientes e Fornecedores", "⚙️ Regras de Classificação"
     ])
 
     with t_tipos:
-        st.subheader("Tipos de Tarefas")
+        st.subheader("Tipos de Tarefas (Compartilhados)")
         c1, c2, c3 = st.tabs(["➕ Incluir", "✏️ Alterar", "🗑️ Excluir"])
         with c1:
             with st.form("f_inc_tt", clear_on_submit=True):
-                n_tt = st.text_input("Nome do Tipo")
+                n_tt = st.text_input("Nome do Tipo de Tarefa")
                 if st.form_submit_button("Salvar") and n_tt.strip():
                     if add_tipo_tarefa(n_tt):
-                        st.success("Cadastrado!")
+                        st.success("Cadastrado com sucesso!")
                         st.rerun()
+                    else:
+                        st.error("Esse tipo de tarefa já existe.")
         with c2:
             df_tt = get_tipos_tarefas()
             if not df_tt.empty:
@@ -1485,81 +1494,6 @@ elif chave_modulo_ativo == "tabelas":
                     st.success("Excluído!")
                     st.rerun()
         st.dataframe(get_tipos_tarefas(), use_container_width=True)
-
-    with t_grupos:
-        st.subheader("Grupos e Subgrupos de Tarefas")
-        sub_g1, sub_g2 = st.tabs(["Nível 1: Grupos", "Nível 2: Subgrupos"])
-        with sub_g1:
-            g1_inc, g1_alt, g1_exc = st.tabs(["➕ Incluir", "✏️ Alterar", "🗑️ Excluir"])
-            with g1_inc:
-                with st.form("f_inc_g1", clear_on_submit=True):
-                    ng1 = st.text_input("Nome do Grupo Nível 1")
-                    if st.form_submit_button("Salvar Grupo N1") and ng1.strip():
-                        if add_grupo_tarefas_n1(ng1):
-                            st.success("Grupo N1 cadastrado!")
-                            st.rerun()
-            with g1_alt:
-                df_g1 = get_grupos_tarefas_n1()
-                if not df_g1.empty:
-                    mg1 = dict(zip(df_g1["nome"], df_g1["id"]))
-                    sg1 = st.selectbox("Selecione para Alterar", list(mg1.keys()), key="alt_g1")
-                    with st.form("f_alt_g1"):
-                        nng1 = st.text_input("Novo Nome", value=sg1)
-                        if st.form_submit_button("Atualizar") and nng1.strip():
-                            update_grupo_tarefas_n1(mg1[sg1], nng1)
-                            st.success("Atualizado!")
-                            st.rerun()
-            with g1_exc:
-                df_g1 = get_grupos_tarefas_n1()
-                if not df_g1.empty:
-                    mg1 = dict(zip(df_g1["nome"], df_g1["id"]))
-                    dg1 = st.selectbox("Selecione para Excluir", list(mg1.keys()), key="del_g1")
-                    st.warning("⚠️ Ao excluir o Grupo N1, todos os subgrupos N2 vinculados serão excluídos permanentemente.")
-                    if st.button("Excluir Grupo N1 Definitivamente", type="primary"):
-                        delete_grupo_tarefas_n1(mg1[dg1])
-                        st.success("Grupo N1 excluído sem retornar!")
-                        st.rerun()
-            st.dataframe(get_grupos_tarefas_n1(), use_container_width=True)
-
-        with sub_g2:
-            g2_inc, g2_alt, g2_exc = st.tabs(["➕ Incluir", "✏️ Alterar", "🗑️ Excluir"])
-            df_g1_disp = get_grupos_tarefas_n1()
-            with g2_inc:
-                if df_g1_disp.empty:
-                    st.warning("Cadastre primeiro um Grupo Nível 1.")
-                else:
-                    mg1 = dict(zip(df_g1_disp["nome"], df_g1_disp["id"]))
-                    with st.form("f_inc_g2", clear_on_submit=True):
-                        pg1 = st.selectbox("Grupo Pai (Nível 1)", list(mg1.keys()))
-                        ng2 = st.text_input("Nome do Subgrupo Nível 2")
-                        if st.form_submit_button("Salvar Subgrupo N2") and ng2.strip():
-                            if add_grupo_tarefas_n2(mg1[pg1], ng2):
-                                st.success("Subgrupo cadastrado!")
-                                st.rerun()
-            with g2_alt:
-                df_g2 = get_grupos_tarefas_n2()
-                if not df_g2.empty:
-                    mg2 = dict(zip(df_g2["caminho_completo"], df_g2["id"]))
-                    sg2 = st.selectbox("Selecione para Alterar", list(mg2.keys()), key="alt_g2")
-                    it_g2 = df_g2[df_g2["id"] == mg2[sg2]].iloc[0]
-                    mg1 = dict(zip(df_g1_disp["nome"], df_g1_disp["id"]))
-                    with st.form("f_alt_g2"):
-                        n_pg1 = st.selectbox("Grupo Pai", list(mg1.keys()), index=list(mg1.values()).index(it_g2["grupo_n1_id"]))
-                        n_ng2 = st.text_input("Nome Subgrupo", value=it_g2["subgrupo_n2"])
-                        if st.form_submit_button("Atualizar") and n_ng2.strip():
-                            update_grupo_tarefas_n2(it_g2["id"], mg1[n_pg1], n_ng2)
-                            st.success("Atualizado!")
-                            st.rerun()
-            with g2_exc:
-                df_g2 = get_grupos_tarefas_n2()
-                if not df_g2.empty:
-                    mg2 = dict(zip(df_g2["caminho_completo"], df_g2["id"]))
-                    dg2 = st.selectbox("Selecione para Excluir", list(mg2.keys()), key="del_g2")
-                    if st.button("Excluir Subgrupo N2", type="primary"):
-                        delete_grupo_tarefas_n2(mg2[dg2])
-                        st.success("Subgrupo excluído!")
-                        st.rerun()
-            st.dataframe(get_grupos_tarefas_n2(), use_container_width=True)
 
     with t_plano:
         st.subheader("Plano de Contas Financeiro")
