@@ -69,7 +69,6 @@ def calcular_proxima_data(data_base: date, frequencia: str, intervalo: int = 1) 
     return data_base + timedelta(days=intervalo)
 
 def to_excel_bytes(df, sheet_name="Relatorio"):
-    """Exporta para Excel se openpyxl existir; caso contrário gera CSV compatível sem quebrar o app."""
     try:
         import openpyxl  # noqa: F401
         output = io.BytesIO()
@@ -115,7 +114,7 @@ def init_db():
         elif not row[1]:
             c.execute("UPDATE usuarios SET senha_hash = ?, ativo = 1 WHERE id = ?", (shash, row[0]))
 
-    # Módulo Financeiro
+    # Financeiro
     c.execute("CREATE TABLE IF NOT EXISTS contatos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, tipo TEXT CHECK(tipo IN ('Cliente', 'Fornecedor')) NOT NULL)")
     c.execute("CREATE TABLE IF NOT EXISTS historicos_padrao (id INTEGER PRIMARY KEY AUTOINCREMENT, codigo TEXT UNIQUE NOT NULL, descricao TEXT NOT NULL, tipo_aplicavel TEXT CHECK(tipo_aplicavel IN ('Receita', 'Despesa', 'Ambos')) NOT NULL)")
     c.execute("CREATE TABLE IF NOT EXISTS contas_sinteticas (id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT CHECK(tipo IN ('Receita', 'Despesa')) NOT NULL, nome TEXT NOT NULL, UNIQUE(tipo, nome))")
@@ -950,7 +949,6 @@ st.sidebar.markdown(
 
 st.sidebar.caption("ESCOLHA O SISTEMA:")
 
-# 2 Botões Maiores / Destaque de Seleção de Sistema
 col_btn1, col_btn2 = st.sidebar.columns(2)
 with col_btn1:
     btn_fin_type = "primary" if st.session_state["sistema_selecionado"] == "financeiro" else "secondary"
@@ -966,7 +964,6 @@ with col_btn2:
 
 st.sidebar.markdown("---")
 
-# Menus e Submenus Dinâmicos de Acordo com o Sistema Selecionado
 if st.session_state["sistema_selecionado"] == "financeiro":
     st.sidebar.markdown("#### 💼 Navegação Financeira")
     menu_financeiro = st.sidebar.radio(
@@ -979,17 +976,14 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
     st.sidebar.markdown("#### ✅ Navegação de Tarefas")
     menu_tarefas = st.sidebar.radio(
         "Selecione a Área:",
-        ["📋 Painel Geral", "📝 Cadastro de Tarefas (CRUD)", "🔄 Rotinas Recorrentes", "📊 Relatórios de Tarefas", "📅 Agenda de Compromissos"],
+        ["📋 Painel Geral", "🔄 Rotinas Recorrentes", "📊 Relatórios de Tarefas", "📅 Agenda de Compromissos"],
         index=0
     )
 
-# Acesso Rápido a Configurações Globais
 with st.sidebar.expander("🛠️ Tabelas & Usuários"):
     modulo_apoio = st.radio("Selecione:", ["Nenhum", "🛠️ Manutenção de Tabelas", "👥 Gestão de Usuários"], index=0)
 
-# ----------------------------------------------------
-# RODAPÉ DA BARRA LATERAL (USUÁRIO E LOGOUT)
-# ----------------------------------------------------
+# Rodapé da Barra Lateral
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     f"""
@@ -1007,7 +1001,7 @@ if st.sidebar.button("🚪 Sair do Sistema", use_container_width=True):
     st.rerun()
 
 # ====================================================
-# EXIBIÇÃO DE MÓDULOS DE APOIO (SE ATIVADOS)
+# MÓDULOS DE APOIO (SE ATIVADOS)
 # ====================================================
 if modulo_apoio == "🛠️ Manutenção de Tabelas":
     st.title("🛠️ Manutenção de Tabelas e Cadastros")
@@ -1470,47 +1464,66 @@ if st.session_state["sistema_selecionado"] == "financeiro":
 elif st.session_state["sistema_selecionado"] == "tarefas":
     st.title("✅ Gestão de Tarefas - Fabíola Guimarães Advocacia")
 
-    # 1. Painel Geral
+    # 1. Painel Geral: Opção Única com Consulta, Inclusão, Alteração e Exclusão (CRUD)
     if menu_tarefas == "📋 Painel Geral":
-        c1, c2 = st.columns([3, 1])
-        with c2:
-            if st.button("⚡ Sincronizar Rotinas", use_container_width=True):
-                q = sincronizar_tarefas_recorrentes()
-                st.success(f"{q} nova(s) tarefa(s) gerada(s)!")
-                st.rerun()
-        df_tar = get_tarefas_df(operador_atual_id)
-        if df_tar.empty:
-            st.info("Nenhuma tarefa cadastrada ou visível no momento.")
-        else:
-            col1, col2, col3 = st.columns(3)
-            st_f = col1.multiselect("Status", ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"], default=["Não Iniciada", "Em Andamento"])
-            pr_f = col2.multiselect("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], default=["Baixa", "Média", "Alta", "Urgente"])
-            u_df = get_usuarios(True)
-            u_lista = ["Todos"] + u_df["nome"].tolist() if not u_df.empty else ["Todos"]
-            resp_f = col3.selectbox("Responsável", u_lista)
-            df_fil = df_tar[(df_tar["status"].isin(st_f)) & (df_tar["prioridade"].isin(pr_f))]
-            if resp_f != "Todos":
-                df_fil = df_fil[df_fil["responsavel"] == resp_f]
-            df_v = df_fil[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref", "descricao"]].copy()
-            df_v["data_limite"] = df_v["data_limite"].apply(formatar_data_br)
-            st.dataframe(df_v, use_container_width=True)
+        tab_cons, tab_inc, tab_alt, tab_exc = st.tabs([
+            "🔍 Consultar Tarefas", 
+            "➕ Incluir Tarefa", 
+            "✏️ Alterar Tarefa", 
+            "🗑️ Excluir Tarefa"
+        ])
 
-    # 2. CRUD Completo de Cadastro de Tarefas
-    elif menu_tarefas == "📝 Cadastro de Tarefas (CRUD)":
-        st.subheader("📝 Cadastro e Manutenção de Tarefas (CRUD)")
-        tab_inc, tab_alt, tab_exc, tab_vis = st.tabs(["➕ Incluir Tarefa", "✏️ Alterar Tarefa", "🗑️ Excluir Tarefa", "📋 Listar / Consultar"])
-        
         u_df = get_usuarios(True)
         cli_df = get_contatos("Cliente")
         tipos_df = get_tipos_tarefas()
-        
+
         m_u = dict(zip(u_df["nome"], u_df["id"])) if not u_df.empty else {}
         m_cli = {"(Nenhum)": None}
         if not cli_df.empty:
             m_cli.update(dict(zip(cli_df["nome"], cli_df["id"])))
         m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"])) if not tipos_df.empty else {}
 
-        # --- TAB 1: INCLUIR ---
+        # --- ABA 1: CONSULTAR ---
+        with tab_cons:
+            c_top1, c_top2 = st.columns([3, 1])
+            with c_top2:
+                if st.button("⚡ Sincronizar Rotinas", use_container_width=True):
+                    q = sincronizar_tarefas_recorrentes()
+                    st.success(f"{q} nova(s) tarefa(s) gerada(s)!")
+                    st.rerun()
+
+            df_tar = get_tarefas_df(operador_atual_id)
+            if df_tar.empty:
+                st.info("Nenhuma tarefa visível para o seu usuário no momento.")
+            else:
+                # Contadores rápidos
+                tot_p = len(df_tar[df_tar["status"].isin(["Não Iniciada", "Em Andamento"])])
+                tot_c = len(df_tar[df_tar["status"] == "Concluída"])
+                tot_urg = len(df_tar[(df_tar["prioridade"] == "Urgente") & (df_tar["status"] != "Concluída")])
+                
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Total de Tarefas", len(df_tar))
+                k2.metric("Pendentes", tot_p)
+                k3.metric("Concluídas", tot_c)
+                k4.metric("Urgentes Pendentes", tot_urg)
+                
+                st.markdown("---")
+
+                col1, col2, col3 = st.columns(3)
+                st_f = col1.multiselect("Filtrar por Status", ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"], default=["Não Iniciada", "Em Andamento"])
+                pr_f = col2.multiselect("Filtrar por Prioridade", ["Baixa", "Média", "Alta", "Urgente"], default=["Baixa", "Média", "Alta", "Urgente"])
+                u_lista = ["Todos"] + u_df["nome"].tolist() if not u_df.empty else ["Todos"]
+                resp_f = col3.selectbox("Filtrar por Responsável", u_lista)
+
+                df_fil = df_tar[(df_tar["status"].isin(st_f)) & (df_tar["prioridade"].isin(pr_f))]
+                if resp_f != "Todos":
+                    df_fil = df_fil[df_fil["responsavel"] == resp_f]
+
+                df_v = df_fil[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref", "descricao"]].copy()
+                df_v["data_limite"] = df_v["data_limite"].apply(formatar_data_br)
+                st.dataframe(df_v, use_container_width=True)
+
+        # --- ABA 2: INCLUIR ---
         with tab_inc:
             st.markdown("##### Incluir Nova Tarefa")
             if u_df.empty:
@@ -1518,19 +1531,19 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
             elif tipos_df.empty:
                 st.warning("Cadastre ao menos um Tipo de Tarefa em '🛠️ Tabelas & Usuários'.")
             else:
-                with st.form("form_crud_inc_tarefa", clear_on_submit=True):
+                with st.form("form_painel_inc_tarefa", clear_on_submit=True):
                     c1, c2 = st.columns(2)
                     tit = c1.text_input("Título da Tarefa")
                     dt_l = c2.date_input("Prazo Limite", value=date.today(), format="DD/MM/YYYY")
-                    
+
                     resp_keys = list(m_u.keys())
                     def_idx = resp_keys.index(operador_atual_nome) if operador_atual_nome in resp_keys else 0
                     resp_s = c1.selectbox("Responsável pela Execução", resp_keys, index=def_idx)
                     tipo_s = c2.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
-                    
+
                     prio_s = c1.selectbox("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], index=1)
                     cli_s = c2.selectbox("Cliente", list(m_cli.keys()))
-                    
+
                     c3, c4 = st.columns(2)
                     vis_s = c3.selectbox(
                         "Visibilidade",
@@ -1540,7 +1553,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                     )
                     proc = c4.text_input("Processo (Opcional)")
                     desc = st.text_area("Descrição / Instruções da Tarefa")
-                    
+
                     if st.form_submit_button("➕ Salvar Tarefa", type="primary"):
                         if tit.strip():
                             val_vis = "Pública" if "Pública" in vis_s else "Privada"
@@ -1550,7 +1563,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                         else:
                             st.warning("Informe o título da tarefa.")
 
-        # --- TAB 2: ALTERAR ---
+        # --- ABA 3: ALTERAR ---
         with tab_alt:
             st.markdown("##### Alterar Dados da Tarefa")
             df_tar_all = get_tarefas_df(operador_atual_id)
@@ -1558,18 +1571,18 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                 st.info("Nenhuma tarefa disponível para alteração.")
             else:
                 t_map = {f"ID {r['id']} | [{r['status']}] {r['titulo']} ({r['responsavel']})": r['id'] for _, r in df_tar_all.iterrows()}
-                tar_id = t_map[st.selectbox("Selecione a Tarefa para Alterar", list(t_map.keys()), key="crud_alt_tar_sel")]
+                tar_id = t_map[st.selectbox("Selecione a Tarefa para Alterar", list(t_map.keys()), key="painel_alt_tar_sel")]
                 item_t = df_tar_all[df_tar_all["id"] == tar_id].iloc[0]
 
-                with st.form("form_crud_edit_tar"):
+                with st.form("form_painel_edit_tar"):
                     c1, c2 = st.columns(2)
                     t_tit = c1.text_input("Título", value=item_t["titulo"])
                     t_dt = c2.date_input("Prazo Limite", value=parse_data_iso(item_t["data_limite"]), format="DD/MM/YYYY")
-                    
+
                     tp_keys = list(m_tipos.keys())
                     tp_idx = list(m_tipos.values()).index(item_t["tipo_tarefa_id"]) if item_t["tipo_tarefa_id"] in list(m_tipos.values()) else 0
                     t_tp_s = c1.selectbox("Tipo de Tarefa", tp_keys, index=tp_idx) if tp_keys else c1.selectbox("Tipo", ["(Sem tipos)"])
-                    
+
                     u_keys = list(m_u.keys())
                     u_idx = list(m_u.values()).index(item_t["responsavel_id"]) if item_t["responsavel_id"] in list(m_u.values()) else 0
                     t_u_s = c2.selectbox("Responsável", u_keys, index=u_idx) if u_keys else None
@@ -1579,18 +1592,18 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                     t_st = c3.selectbox("Status", st_list, index=st_list.index(item_t["status"]) if item_t["status"] in st_list else 0)
                     pr_list = ["Baixa", "Média", "Alta", "Urgente"]
                     t_pr = c4.selectbox("Prioridade", pr_list, index=pr_list.index(item_t["prioridade"]) if item_t["prioridade"] in pr_list else 1)
-                    
+
                     c5, c6 = st.columns(2)
                     cli_keys = list(m_cli.keys())
                     cli_idx = list(m_cli.values()).index(item_t["cliente_id"]) if item_t["cliente_id"] in list(m_cli.values()) else 0
                     t_cli_s = c5.selectbox("Cliente", cli_keys, index=cli_idx)
-                    
+
                     vis_atual_idx = 0 if item_t["visibilidade"] == "Pública" else 1
                     t_vis_edit = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=vis_atual_idx)
 
                     t_proc = st.text_input("Processo", value=item_t["processo_ref"] if pd.notna(item_t["processo_ref"]) else "")
                     t_desc = st.text_area("Descrição", value=item_t["descricao"] if pd.notna(item_t["descricao"]) else "")
-                    
+
                     if st.form_submit_button("✏️ Salvar Alterações", type="primary"):
                         novo_tp_id = m_tipos.get(t_tp_s, item_t["tipo_tarefa_id"])
                         novo_u_id = m_u.get(t_u_s, item_t["responsavel_id"])
@@ -1599,7 +1612,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                         st.success("Tarefa atualizada com sucesso!")
                         st.rerun()
 
-        # --- TAB 3: EXCLUIR ---
+        # --- ABA 4: EXCLUIR ---
         with tab_exc:
             st.markdown("##### Excluir Tarefa")
             df_tar_all = get_tarefas_df(operador_atual_id)
@@ -1607,25 +1620,14 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                 st.info("Nenhuma tarefa para excluir.")
             else:
                 del_map = {f"ID {r['id']} | [{r['status']}] {r['titulo']} ({r['responsavel']})": r['id'] for _, r in df_tar_all.iterrows()}
-                d_id = del_map[st.selectbox("Selecione a Tarefa para Excluir", list(del_map.keys()), key="crud_del_tar_sel")]
-                st.warning("⚠️ Esta ação é permanente e não poderá ser desfeita.")
+                d_id = del_map[st.selectbox("Selecione a Tarefa para Excluir", list(del_map.keys()), key="painel_del_tar_sel")]
+                st.warning("⚠️ Esta ação é permanente e removerá a tarefa do sistema.")
                 if st.button("🗑️ Excluir Tarefa Definitivamente", type="primary"):
                     delete_tarefa(d_id)
                     st.success("Tarefa excluída com sucesso!")
                     st.rerun()
 
-        # --- TAB 4: LISTAR / CONSULTAR ---
-        with tab_vis:
-            st.markdown("##### Consulta Geral de Tarefas")
-            df_cons = get_tarefas_df(operador_atual_id)
-            if df_cons.empty:
-                st.info("Nenhuma tarefa cadastrada.")
-            else:
-                df_c_view = df_cons[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref"]].copy()
-                df_c_view["data_limite"] = df_c_view["data_limite"].apply(formatar_data_br)
-                st.dataframe(df_c_view, use_container_width=True)
-
-    # 3. Rotinas Recorrentes
+    # 2. Rotinas Recorrentes
     elif menu_tarefas == "🔄 Rotinas Recorrentes":
         st.subheader("🔄 Gestão de Rotinas Periódicas / Recorrentes")
         t_rec_in, t_rec_ls = st.tabs(["➕ Nova Regra Recorrente", "📋 Regras Ativas"])
@@ -1668,7 +1670,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                     st.success("Regra removida!")
                     st.rerun()
 
-    # 4. Relatórios de Tarefas
+    # 3. Relatórios de Tarefas
     elif menu_tarefas == "📊 Relatórios de Tarefas":
         st.subheader("📊 Relatórios e Métricas de Tarefas")
         c1, c2, c3 = st.columns([1.5, 1.2, 1.3])
@@ -1710,7 +1712,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
             st.dataframe(df_rf_view, use_container_width=True)
             st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
 
-    # 5. Agenda de Compromissos
+    # 4. Agenda de Compromissos
     elif menu_tarefas == "📅 Agenda de Compromissos":
         st.subheader("📅 Agenda de Compromissos do Escritório")
         t_v, t_n, t_rec, t_g = st.tabs(["📆 Visualizar Agenda", "➕ Novo Compromisso", "🔄 Repetições da Agenda", "⚙️ Alterar / Excluir"])
