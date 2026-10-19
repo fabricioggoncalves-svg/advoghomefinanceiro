@@ -69,7 +69,7 @@ def calcular_proxima_data(data_base: date, frequencia: str, intervalo: int = 1) 
     return data_base + timedelta(days=intervalo)
 
 def to_excel_bytes(df, sheet_name="Relatorio"):
-    """Exporta para Excel nativo se openpyxl existir; caso contrário gera CSV compatível sem quebrar o app."""
+    """Exporta para Excel se openpyxl existir; caso contrário gera CSV compatível sem quebrar o app."""
     try:
         import openpyxl  # noqa: F401
         output = io.BytesIO()
@@ -89,7 +89,6 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
     
-    # Usuários
     c.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,7 +114,7 @@ def init_db():
         elif not row[1]:
             c.execute("UPDATE usuarios SET senha_hash = ?, ativo = 1 WHERE id = ?", (shash, row[0]))
 
-    # Módulo Financeiro
+    # Financeiro
     c.execute("CREATE TABLE IF NOT EXISTS contatos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, tipo TEXT CHECK(tipo IN ('Cliente', 'Fornecedor')) NOT NULL)")
     c.execute("CREATE TABLE IF NOT EXISTS historicos_padrao (id INTEGER PRIMARY KEY AUTOINCREMENT, codigo TEXT UNIQUE NOT NULL, descricao TEXT NOT NULL, tipo_aplicavel TEXT CHECK(tipo_aplicavel IN ('Receita', 'Despesa', 'Ambos')) NOT NULL)")
     c.execute("CREATE TABLE IF NOT EXISTS contas_sinteticas (id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT CHECK(tipo IN ('Receita', 'Despesa')) NOT NULL, nome TEXT NOT NULL, UNIQUE(tipo, nome))")
@@ -149,7 +148,7 @@ def init_db():
         )
     """)
 
-    # Tipos de Tarefas (Compartilhados)
+    # Tipos de Tarefas
     c.execute("""
         CREATE TABLE IF NOT EXISTS tipos_tarefas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,7 +206,6 @@ def init_db():
         )
     """)
 
-    # Migrações seguras de colunas
     c.execute("PRAGMA table_info(tarefas)")
     cols_t = [i[1] for i in c.fetchall()]
     if "visibilidade" not in cols_t:
@@ -312,7 +310,7 @@ def delete_usuario(usuario_id):
     conn.commit()
     conn.close()
 
-# --- Funções: Tipos de Tarefas (Compartilhados) ---
+# --- Funções: Tipos de Tarefas ---
 def get_tipos_tarefas():
     conn = get_connection()
     df = pd.read_sql_query("SELECT id, nome FROM tipos_tarefas ORDER BY nome ASC", conn)
@@ -422,7 +420,7 @@ def update_conta_analitica(analitica_id, sintetica_id, nome, historico_padrao_id
 def delete_conta_analitica(analitica_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE lancamentos SET conta_analitica_id = NULL WHERE conta_analitica_id IN (SELECT id FROM contas_analiticas WHERE sintetica_id = ?)", (analitica_id,))
+    c.execute("UPDATE lancamentos SET conta_analitica_id = NULL WHERE conta_analitica_id = ?", (analitica_id,))
     c.execute("DELETE FROM contas_recorrentes WHERE conta_analitica_id = ?", (analitica_id,))
     c.execute("DELETE FROM regras_classificacao WHERE analitica_id = ?", (analitica_id,))
     c.execute("DELETE FROM contas_analiticas WHERE id = ?", (analitica_id,))
@@ -627,7 +625,7 @@ def gerar_contas_do_mes(ano, mes):
     conn.close()
     return gerados, ignorados, "Processamento concluído."
 
-# --- Funções: Tarefas & Recorrência (Regra de Visibilidade por Usuário) ---
+# --- Funções: Tarefas & Recorrência (Regra de Visibilidade) ---
 def get_tarefas_df(usuario_logado_id=None):
     conn = get_connection()
     q = """
@@ -934,531 +932,94 @@ operador_atual_id = usuario_logado["id"]
 operador_atual_nome = usuario_logado["nome"]
 
 # ----------------------------------------------------
-# BARRA LATERAL (ROTEAMENTO POR CHAVE SEGURA)
+# BARRA LATERAL APRIMORADA (SISTEMAS + SUBMENUS + RODAPÉ)
 # ----------------------------------------------------
-st.sidebar.markdown("## ⚖️ Fabíola Guimarães")
-st.sidebar.caption("ADVOCACIA & CONSULTORIA")
-st.sidebar.markdown(f"👤 **{operador_atual_nome}**")
-st.sidebar.caption(f"Perfil: {usuario_logado['perfil']}")
+if "sistema_selecionado" not in st.session_state:
+    st.session_state["sistema_selecionado"] = "financeiro"
 
-if st.sidebar.button("🚪 Sair / Logout", use_container_width=True):
+st.sidebar.markdown(
+    """
+    <div style="text-align: center; margin-bottom: 15px;">
+        <h2 style="margin: 0; padding: 0;">⚖️ Fabíola Guimarães</h2>
+        <span style="font-size: 11px; letter-spacing: 2px; color: #888;">ADVOCACIA & CONSULTORIA</span>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+st.sidebar.caption("ESCOLHA O SISTEMA:")
+
+# 2 Botões Maiores / Destaque de Seleção de Sistema
+col_btn1, col_btn2 = st.sidebar.columns(2)
+with col_btn1:
+    btn_fin_type = "primary" if st.session_state["sistema_selecionado"] == "financeiro" else "secondary"
+    if st.button("💼 Financeiro", type=btn_fin_type, use_container_width=True):
+        st.session_state["sistema_selecionado"] = "financeiro"
+        st.rerun()
+
+with col_btn2:
+    btn_tar_type = "primary" if st.session_state["sistema_selecionado"] == "tarefas" else "secondary"
+    if st.button("✅ Tarefas", type=btn_tar_type, use_container_width=True):
+        st.session_state["sistema_selecionado"] = "tarefas"
+        st.rerun()
+
+st.sidebar.markdown("---")
+
+# Menus e Submenus Dinâmicos de Acordo com o Sistema Selecionado
+if st.session_state["sistema_selecionado"] == "financeiro":
+    st.sidebar.markdown("#### 💼 Navegação Financeira")
+    menu_financeiro = st.sidebar.radio(
+        "Selecione a Área:",
+        ["📊 Painel Geral", "🔴 Contas a Pagar", "🟢 Contas a Receber", "⚡ Gerar Contas Mensais", "📈 Relatórios Financeiros", "📁 Cadastros de Apoio"],
+        index=0
+    )
+    
+    # Submenu contextual para Contas a Pagar / Receber
+    sub_acao_fin = None
+    if menu_financeiro in ["🔴 Contas a Pagar", "🟢 Contas a Receber"]:
+        st.sidebar.caption("Operação:")
+        sub_acao_fin = st.sidebar.segmented_control(
+            "Ação:",
+            options=["Incluir", "Baixar", "Alterar", "Excluir"],
+            default="Incluir",
+            label_visibility="collapsed"
+        )
+
+elif st.session_state["sistema_selecionado"] == "tarefas":
+    st.sidebar.markdown("#### ✅ Navegação de Tarefas")
+    menu_tarefas = st.sidebar.radio(
+        "Selecione a Área:",
+        ["📋 Quadro Geral", "➕ Nova Tarefa", "🔄 Rotinas Recorrentes", "📊 Relatórios de Tarefas", "📅 Agenda de Compromissos"],
+        index=0
+    )
+
+# Acesso Rápido a Configurações Globais
+with st.sidebar.expander("🛠️ Tabelas & Usuários"):
+    modulo_apoio = st.radio("Selecione:", ["Nenhum", "🛠️ Manutenção de Tabelas", "👥 Gestão de Usuários"], index=0)
+
+# ----------------------------------------------------
+# RODAPÉ DA BARRA LATERAL (USUÁRIO E LOGOUT)
+# ----------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    f"""
+    <div style="background-color: rgba(128, 128, 128, 0.08); padding: 10px; border-radius: 8px; margin-bottom: 10px;">
+        <span style="font-size: 11px; color: #888; text-transform: uppercase;">Usuário Conectado</span><br>
+        <strong style="font-size: 14px;">👤 {operador_atual_nome}</strong><br>
+        <span style="font-size: 12px; color: #666;">Perfil: {usuario_logado['perfil']}</span>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+if st.sidebar.button("🚪 Sair do Sistema", use_container_width=True):
     st.session_state["usuario_autenticado"] = None
     st.rerun()
 
-st.sidebar.divider()
-
-opcoes_modulos = {
-    "financeiro": "💼 Gestão Financeira",
-    "tarefas": "✅ Gestão de Tarefas",
-    "agenda": "📅 Agenda de Compromissos",
-    "tabelas": "🛠️ Manutenção de Tabelas (CRUDs)",
-    "usuarios": "👥 Usuários"
-}
-
-chave_modulo_ativo = st.sidebar.selectbox(
-    "Selecione o Módulo:",
-    options=list(opcoes_modulos.keys()),
-    format_func=lambda k: opcoes_modulos[k],
-    key="sistema_principal_chave"
-)
-st.sidebar.divider()
-
 # ====================================================
-# MÓDULO 1: GESTÃO FINANCEIRA
+# EXIBIÇÃO DE MÓDULOS DE APOIO (SE ATIVADOS)
 # ====================================================
-if chave_modulo_ativo == "financeiro":
-    st.title("💼 Gestão Financeira - Dra. Fabíola & Fabrício")
-    menu = st.sidebar.radio("Menu Financeiro", ["Painel Geral", "🔴 Contas a Pagar", "🟢 Contas a Receber", "⚡ Gerar Contas a Pagar", "📊 Relatórios", "Cadastros"])
-
-    if menu == "Painel Geral":
-        st.subheader("Resumo Financeiro & Balanço")
-        df = get_lancamentos_df()
-        if df.empty:
-            st.info("Nenhum lançamento registrado até o momento.")
-        else:
-            df["valor"] = pd.to_numeric(df["valor"])
-            c1, c2 = st.columns(2)
-            tf = c1.multiselect("Tipo", ["Receita", "Despesa"], default=["Receita", "Despesa"])
-            sf = c2.multiselect("Status", ["Concluído", "Pendente"], default=["Concluído", "Pendente"])
-            df_f = df[(df["tipo"].isin(tf)) & (df["status"].isin(sf))].copy()
-            rec = df_f[df_f["tipo"] == "Receita"]["valor"].sum()
-            desp = df_f[df_f["tipo"] == "Despesa"]["valor"].sum()
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Receitas", f"R$ {rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            m2.metric("Total Despesas", f"R$ {desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            m3.metric("Resultado", f"R$ {(rec - desp):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            st.divider()
-            st.subheader("⚖️ Acerto de Contas entre Sócios (50/50)")
-            desp_pagas = df[(df["tipo"] == "Despesa") & (df["status"] == "Concluído")]
-            t_fab = desp_pagas[desp_pagas["pago_por"] == "Fabrício"]["valor"].sum()
-            t_fabi = desp_pagas[desp_pagas["pago_por"] == "Fabíola"]["valor"].sum()
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Pago por Fabrício", f"R$ {t_fab:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            col2.metric("Pago por Fabíola", f"R$ {t_fabi:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            dif = (t_fab - t_fabi) / 2
-            with col3:
-                if dif > 0:
-                    st.success(f"**Fabíola deve a Fabrício:** R$ {dif:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                elif dif < 0:
-                    st.info(f"**Fabrício deve a Fabíola:** R$ {abs(dif):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                else:
-                    st.success("**Contas equilibradas!**")
-            st.divider()
-            df_view = df_f[["id", "data_vencimento", "data_pagamento", "tipo", "contato", "conta_sintetica", "conta_analitica", "historico_padrao", "complemento", "valor", "status", "pago_por"]].copy()
-            df_view["data_vencimento"] = df_view["data_vencimento"].apply(formatar_data_br)
-            df_view["data_pagamento"] = df_view["data_pagamento"].apply(formatar_data_br)
-            st.dataframe(df_view, use_container_width=True)
-
-    elif menu in ["🔴 Contas a Pagar", "🟢 Contas a Receber"]:
-        tipo_op = "Despesa" if "Pagar" in menu else "Receita"
-        st.subheader(f"{'🔴 Contas a Pagar (Despesas)' if tipo_op == 'Despesa' else '🟢 Contas a Receber (Receitas)'}")
-        t1, t2, t3, t4 = st.tabs(["➕ Incluir", "✅ Baixa / Confirmação", "✏️ Alterar", "🗑️ Excluir"])
-        contatos_df = get_contatos("Fornecedor" if tipo_op == "Despesa" else "Cliente")
-        analiticas_df = get_contas_analiticas(tipo_op)
-        historicos_df = get_historicos(tipo_op)
-        map_cont = {"(Opcional)": None}
-        if not contatos_df.empty:
-            map_cont.update(dict(zip(contatos_df["nome"], contatos_df["id"])))
-        map_anal = dict(zip(analiticas_df["caminho_completo"], analiticas_df["id"])) if not analiticas_df.empty else {}
-        map_hist = {"(Sem histórico)": None}
-        if not historicos_df.empty:
-            map_hist.update({f"{r['codigo']} - {r['descricao']}": r['id'] for _, r in historicos_df.iterrows()})
-
-        with t1:
-            if not map_anal:
-                st.warning("Cadastre primeiro uma Conta Analítica.")
-            else:
-                with st.form(f"form_inc_{tipo_op}", clear_on_submit=True):
-                    c1, c2 = st.columns(2)
-                    dt_venc = c1.date_input("Data de Vencimento", value=date.today(), format="DD/MM/YYYY")
-                    val = c2.number_input("Valor (R$)", min_value=0.01, step=50.0, format="%.2f")
-                    cont_sel = c1.selectbox("Contato", list(map_cont.keys()))
-                    anal_sel = c2.selectbox("Classificação Analítica", list(map_anal.keys()))
-                    hist_sel = c1.selectbox("Histórico Padrão", list(map_hist.keys()))
-                    compl = c2.text_input("Complemento")
-                    c3, c4, c5 = st.columns(3)
-                    st_sel = c3.selectbox("Status", ["Pendente", "Concluído"])
-                    dt_pg = c4.date_input("Data Pagamento", value=date.today(), format="DD/MM/YYYY") if st_sel == "Concluído" else None
-                    pg_por = c5.selectbox("Pago por", SOCIOS) if (st_sel == "Concluído" and tipo_op == "Despesa") else None
-                    if st.form_submit_button("Salvar"):
-                        add_lancamento(tipo_op, dt_venc, val, map_cont[cont_sel], map_hist[hist_sel], map_anal[anal_sel], compl.strip(), st_sel, dt_pg, pg_por)
-                        st.success("Lançamento salvo!")
-                        st.rerun()
-
-        with t2:
-            c1, c2 = st.columns(2)
-            d_ini = c1.date_input("Vencimento Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY", key=f"bx_ini_{tipo_op}")
-            d_fim = c2.date_input("Vencimento Final", value=date.today(), format="DD/MM/YYYY", key=f"bx_fim_{tipo_op}")
-            df_bx = get_lancamentos_df(tipo_op)
-            df_pend = df_bx[(df_bx["status"] == "Pendente") & (df_bx["data_vencimento"] >= str(d_ini)) & (df_bx["data_vencimento"] <= str(d_fim))].copy() if not df_bx.empty else pd.DataFrame()
-            if df_pend.empty:
-                st.info("Nenhum título pendente no período.")
-            else:
-                df_pend["Baixar?"] = False
-                df_pend["data_vencimento"] = df_pend["data_vencimento"].apply(formatar_data_br)
-                tb = st.data_editor(df_pend[["Baixar?", "id", "data_vencimento", "contato", "conta_analitica", "complemento", "valor"]], hide_index=True, use_container_width=True)
-                sel_ids = tb[tb["Baixar?"] == True]["id"].tolist()
-                if sel_ids:
-                    with st.form(f"form_bx_{tipo_op}"):
-                        c3, c4 = st.columns(2)
-                        dt_bx = c3.date_input("Data Efetiva", value=date.today(), format="DD/MM/YYYY")
-                        pg_s = c4.selectbox("Pago por", SOCIOS) if tipo_op == "Despesa" else None
-                        if st.form_submit_button(f"Confirmar Baixa ({len(sel_ids)} títulos)"):
-                            baixar_lancamentos_em_lote(sel_ids, dt_bx, pg_s)
-                            st.success("Baixa concluída!")
-                            st.rerun()
-
-        with t3:
-            df_all = get_lancamentos_df(tipo_op)
-            if df_all.empty:
-                st.info("Nenhum lançamento cadastrado.")
-            else:
-                op_map = {f"ID {r['id']} | Venc: {formatar_data_br(r['data_vencimento'])} | R$ {r['valor']:.2f} | {r['contato']}": r['id'] for _, r in df_all.iterrows()}
-                l_id = op_map[st.selectbox("Selecione para Alterar", list(op_map.keys()), key=f"sel_alt_{tipo_op}")]
-                item = df_all[df_all["id"] == l_id].iloc[0]
-                with st.form(f"form_alt_item_{tipo_op}"):
-                    c1, c2 = st.columns(2)
-                    dt_v = c1.date_input("Vencimento", value=parse_data_iso(item["data_vencimento"]), format="DD/MM/YYYY")
-                    vl = c2.number_input("Valor (R$)", value=float(item["valor"]), step=50.0)
-                    cp = c1.text_input("Complemento", value=item["complemento"] if pd.notna(item["complemento"]) else "")
-                    st_e = c2.selectbox("Status", ["Pendente", "Concluído"], index=0 if item["status"] == "Pendente" else 1)
-                    dt_p = c1.date_input("Data Pagamento", value=parse_data_iso(item["data_pagamento"]), format="DD/MM/YYYY") if st_e == "Concluído" else None
-                    pg_e = c2.selectbox("Pago por", SOCIOS, index=SOCIOS.index(item["pago_por"]) if item["pago_por"] in SOCIOS else 0) if (st_e == "Concluído" and tipo_op == "Despesa") else None
-                    if st.form_submit_button("Atualizar"):
-                        update_lancamento(l_id, tipo_op, dt_v, dt_p, vl, item["contato_id"], item["historico_id"], item["conta_analitica_id"], cp.strip(), st_e, pg_e)
-                        st.success("Atualizado!")
-                        st.rerun()
-
-        with t4:
-            df_all = get_lancamentos_df(tipo_op)
-            if not df_all.empty:
-                del_map = {f"ID {r['id']} | Venc: {formatar_data_br(r['data_vencimento'])} | R$ {r['valor']:.2f} | {r['contato']}": r['id'] for _, r in df_all.iterrows()}
-                d_id = del_map[st.selectbox("Selecione para Excluir", list(del_map.keys()), key=f"sel_del_{tipo_op}")]
-                if st.button("🗑️ Excluir Lançamento", type="primary"):
-                    delete_lancamento(d_id)
-                    st.success("Excluído!")
-                    st.rerun()
-
-    elif menu == "⚡ Gerar Contas a Pagar":
-        st.subheader("⚡ Geração Automática Mensal de Contas a Pagar")
-        c1, c2 = st.columns(2)
-        mes = c1.selectbox("Mês", list(range(1, 13)), index=date.today().month - 1)
-        ano = c2.number_input("Ano", min_value=2024, max_value=2040, value=date.today().year)
-        if st.button("Executar Geração", type="primary"):
-            g, ig, msg = gerar_contas_do_mes(ano, mes)
-            st.success(f"Concluído! {g} geradas, {ig} ignoradas (já existiam).")
-            st.rerun()
-
-    elif menu == "📊 Relatórios":
-        st.subheader("📊 Relatórios Financeiros")
-        df_base = get_lancamentos_df()
-        if not df_base.empty:
-            df_base["valor"] = pd.to_numeric(df_base["valor"])
-            c1, c2 = st.columns(2)
-            d1 = c1.date_input("Início", value=date.today().replace(day=1), format="DD/MM/YYYY")
-            d2 = c2.date_input("Fim", value=date.today(), format="DD/MM/YYYY")
-            df_rel = df_base[(df_base["data_vencimento"] >= str(d1)) & (df_base["data_vencimento"] <= str(d2))]
-            st.dataframe(df_rel, use_container_width=True)
-            st.download_button("Exportar Excel", data=to_excel_bytes(df_rel, "Financeiro"), file_name="relatorio_financeiro.xlsx", use_container_width=True)
-
-    elif menu == "Cadastros":
-        st.subheader("Cadastros de Apoio Financeiro")
-        t_rec, t_reg = st.tabs(["Contas Recorrentes", "Regras de Classificação"])
-        with t_rec:
-            st.dataframe(get_contas_recorrentes(), use_container_width=True)
-        with t_reg:
-            st.dataframe(get_regras_classificacao(), use_container_width=True)
-
-# ====================================================
-# MÓDULO 2: GESTÃO DE TAREFAS (REGRA DE VISIBILIDADE)
-# ====================================================
-elif chave_modulo_ativo == "tarefas":
-    st.title("✅ Fabíola Guimarães Advocacia — Gestão de Tarefas")
-    tab_p, tab_n, tab_rec, tab_rel, tab_g = st.tabs(["📋 Painel de Tarefas", "➕ Nova Tarefa", "🔄 Tarefas Recorrentes", "📊 Relatórios de Tarefas", "⚙️ Gerenciar / Alterar"])
-
-    with tab_p:
-        c1, c2 = st.columns([3, 1])
-        with c2:
-            if st.button("⚡ Sincronizar Recorrentes", use_container_width=True):
-                q = sincronizar_tarefas_recorrentes()
-                st.success(f"{q} nova(s) tarefa(s) gerada(s)!")
-                st.rerun()
-        df_tar = get_tarefas_df(operador_atual_id)
-        if df_tar.empty:
-            st.info("Nenhuma tarefa visível para o seu usuário no momento.")
-        else:
-            col1, col2, col3 = st.columns(3)
-            st_f = col1.multiselect("Status", ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"], default=["Não Iniciada", "Em Andamento"])
-            pr_f = col2.multiselect("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], default=["Baixa", "Média", "Alta", "Urgente"])
-            u_df = get_usuarios(True)
-            u_lista = ["Todos"] + u_df["nome"].tolist() if not u_df.empty else ["Todos"]
-            resp_f = col3.selectbox("Responsável", u_lista)
-            df_fil = df_tar[(df_tar["status"].isin(st_f)) & (df_tar["prioridade"].isin(pr_f))]
-            if resp_f != "Todos":
-                df_fil = df_fil[df_fil["responsavel"] == resp_f]
-            df_v = df_fil[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref", "descricao"]].copy()
-            df_v["data_limite"] = df_v["data_limite"].apply(formatar_data_br)
-            st.dataframe(df_v, use_container_width=True)
-
-    with tab_n:
-        st.markdown("#### Criar Nova Tarefa")
-        u_df = get_usuarios(True)
-        cli_df = get_contatos("Cliente")
-        tipos_df = get_tipos_tarefas()
-        if u_df.empty:
-            st.warning("Cadastre usuários primeiro.")
-        elif tipos_df.empty:
-            st.warning("Cadastre ao menos um Tipo de Tarefa em '🛠️ Manutenção de Tabelas'.")
-        else:
-            m_u = dict(zip(u_df["nome"], u_df["id"]))
-            m_cli = {"(Nenhum)": None}
-            if not cli_df.empty:
-                m_cli.update(dict(zip(cli_df["nome"], cli_df["id"])))
-            m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
-
-            with st.form("form_nova_tarefa", clear_on_submit=True):
-                c1, c2 = st.columns(2)
-                tit = c1.text_input("Título da Tarefa")
-                dt_l = c2.date_input("Prazo Limite", value=date.today(), format="DD/MM/YYYY")
-                
-                resp_keys = list(m_u.keys())
-                def_idx = resp_keys.index(operador_atual_nome) if operador_atual_nome in resp_keys else 0
-                resp_s = c1.selectbox("Responsável", resp_keys, index=def_idx)
-                tipo_s = c2.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
-                
-                prio_s = c1.selectbox("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], index=1)
-                cli_s = c2.selectbox("Cliente", list(m_cli.keys()))
-                
-                c3, c4 = st.columns(2)
-                vis_s = c3.selectbox(
-                    "Visibilidade da Tarefa",
-                    ["Pública (Visível a todos)", "Privada / Restrita"],
-                    index=0,
-                    help="Tarefas Públicas são vistas por todos. Tarefas Privadas/Restritas são vistas apenas pelo Criador e pelo Responsável."
-                )
-                proc = c4.text_input("Processo (Opcional)")
-                
-                desc = st.text_area("Descrição / Instruções")
-                
-                if st.form_submit_button("Salvar Tarefa", type="primary"):
-                    if tit.strip():
-                        val_vis = "Pública" if "Pública" in vis_s else "Privada"
-                        add_tarefa(tit.strip(), desc.strip(), dt_l, prio_s, m_u[resp_s], m_cli[cli_s], proc.strip(), m_tipos[tipo_s], operador_atual_id, visibilidade=val_vis)
-                        st.success("Tarefa cadastrada com sucesso!")
-                        st.rerun()
-                    else:
-                        st.warning("Informe o título da tarefa.")
-
-    with tab_rec:
-        st.markdown("#### Tarefas Recorrentes (Rotinas Periódicas)")
-        t_rec_in, t_rec_ls = st.tabs(["➕ Nova Regra", "📋 Regras Ativas"])
-        with t_rec_in:
-            u_df = get_usuarios(True)
-            tipos_df = get_tipos_tarefas()
-            if not u_df.empty and not tipos_df.empty:
-                m_u = dict(zip(u_df["nome"], u_df["id"]))
-                m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
-                with st.form("form_inc_tar_rec", clear_on_submit=True):
-                    c1, c2, c3 = st.columns(3)
-                    tit_r = c1.text_input("Título da Rotina")
-                    freq_r = c2.selectbox("Frequência", ["Semanal", "Diária", "Mensal", "Anual"], index=0)
-                    dt_ini_r = c3.date_input("Início", value=date.today(), format="DD/MM/YYYY")
-                    
-                    c4, c5, c6 = st.columns(3)
-                    tipo_sr = c4.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
-                    resp_sr = c5.selectbox("Responsável", list(m_u.keys()))
-                    vis_sr = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=0)
-                    
-                    desc_r = st.text_area("Instruções da Rotina")
-                    if st.form_submit_button("Criar Regra Recorrente"):
-                        if tit_r.strip():
-                            val_vis_r = "Pública" if "Pública" in vis_sr else "Privada"
-                            add_tarefa_recorrente(tit_r.strip(), desc_r.strip(), freq_r, 1, dt_ini_r, "Média", m_u[resp_sr], None, "", m_tipos[tipo_sr], operador_atual_id, visibilidade=val_vis_r)
-                            st.success("Regra criada com sucesso!")
-                            st.rerun()
-                        else:
-                            st.warning("Informe o título da rotina.")
-        with t_rec_ls:
-            df_recs = get_tarefas_recorrentes(operador_atual_id)
-            if df_recs.empty:
-                st.info("Nenhuma rotina recorrente cadastrada ou visível.")
-            else:
-                st.dataframe(df_recs[["id", "titulo", "tipo_tarefa", "visibilidade", "frequencia", "proxima_execucao", "responsavel"]], use_container_width=True)
-                r_map = {f"ID {r['id']} | {r['titulo']}": r['id'] for _, r in df_recs.iterrows()}
-                d_rid = r_map[st.selectbox("Excluir Regra", list(r_map.keys()))]
-                if st.button("🗑️ Excluir Regra de Recorrência", type="primary"):
-                    delete_tarefa_recorrente(d_rid)
-                    st.success("Regra removida!")
-                    st.rerun()
-
-    with tab_rel:
-        st.markdown("#### 📊 Relatórios de Tarefas com Pré-Filtros")
-        c1, c2, c3 = st.columns([1.5, 1.2, 1.3])
-        pf_dt = c1.radio("Período:", ["Todas", "Vencidas", "Hoje", "Amanhã", "Esta Semana", "Este Mês"], horizontal=True)
-        pf_st = c2.selectbox("Status:", ["Todas", "Pendentes (Ativas)", "Concluídas"])
-        u_df = get_usuarios(True)
-        resp_lista = ["Todos os Responsáveis", "👤 Minhas Tarefas"] + (u_df["nome"].tolist() if not u_df.empty else [])
-        pf_resp = c3.selectbox("Responsável:", resp_lista)
-        
-        df_tar_base = get_tarefas_df(operador_atual_id)
-        if not df_tar_base.empty:
-            df_rf = df_tar_base.copy()
-            hoje = date.today()
-            if pf_dt == "Hoje":
-                df_rf = df_rf[df_rf["data_limite"] == str(hoje)]
-            elif pf_dt == "Amanhã":
-                df_rf = df_rf[df_rf["data_limite"] == str(hoje + timedelta(days=1))]
-            elif pf_dt == "Vencidas":
-                df_rf = df_rf[(df_rf["data_limite"] < str(hoje)) & (df_rf["status"] != "Concluída")]
-            elif pf_dt == "Esta Semana":
-                ini_s = hoje - timedelta(days=hoje.weekday())
-                df_rf = df_rf[(df_rf["data_limite"] >= str(ini_s)) & (df_rf["data_limite"] <= str(ini_s + timedelta(days=6)))]
-            elif pf_dt == "Este Mês":
-                df_rf = df_rf[(df_rf["data_limite"] >= str(hoje.replace(day=1))) & (df_rf["data_limite"] <= str(hoje.replace(day=calendar.monthrange(hoje.year, hoje.month)[1])))]
-
-            if pf_st == "Pendentes (Ativas)":
-                df_rf = df_rf[df_rf["status"].isin(["Não Iniciada", "Em Andamento"])]
-            elif pf_st == "Concluídas":
-                df_rf = df_rf[df_rf["status"] == "Concluída"]
-
-            if pf_resp == "👤 Minhas Tarefas":
-                df_rf = df_rf[df_rf["responsavel_id"] == operador_atual_id]
-            elif pf_resp != "Todos os Responsáveis":
-                df_rf = df_rf[df_rf["responsavel"] == pf_resp]
-
-            st.metric("Total de Tarefas Filtradas", len(df_rf))
-            df_rf_view = df_rf[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref"]].copy()
-            df_rf_view["data_limite"] = df_rf_view["data_limite"].apply(formatar_data_br)
-            st.dataframe(df_rf_view, use_container_width=True)
-            st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
-
-    with tab_g:
-        df_tar_all = get_tarefas_df(operador_atual_id)
-        if df_tar_all.empty:
-            st.info("Nenhuma tarefa para gerenciar.")
-        else:
-            t_map = {f"ID {r['id']} | [{r['status']}] {r['titulo']} ({r['responsavel']})": r['id'] for _, r in df_tar_all.iterrows()}
-            tar_id = t_map[st.selectbox("Selecione a Tarefa", list(t_map.keys()))]
-            item_t = df_tar_all[df_tar_all["id"] == tar_id].iloc[0]
-            
-            tipos_tar = get_tipos_tarefas()
-            m_tipos_e = dict(zip(tipos_tar["nome"], tipos_tar["id"])) if not tipos_tar.empty else {}
-            u_df = get_usuarios(True)
-            m_u_e = dict(zip(u_df["nome"], u_df["id"])) if not u_df.empty else {}
-            cli_df = get_contatos("Cliente")
-            m_cli_e = {"(Nenhum)": None}
-            if not cli_df.empty:
-                m_cli_e.update(dict(zip(cli_df["nome"], cli_df["id"])))
-
-            with st.form("form_edit_tar"):
-                c1, c2 = st.columns(2)
-                t_tit = c1.text_input("Título", value=item_t["titulo"])
-                t_dt = c2.date_input("Prazo Limite", value=parse_data_iso(item_t["data_limite"]), format="DD/MM/YYYY")
-                
-                tp_keys = list(m_tipos_e.keys())
-                tp_idx = list(m_tipos_e.values()).index(item_t["tipo_tarefa_id"]) if item_t["tipo_tarefa_id"] in list(m_tipos_e.values()) else 0
-                t_tp_s = c1.selectbox("Tipo de Tarefa", tp_keys, index=tp_idx) if tp_keys else c1.selectbox("Tipo", ["(Sem tipos)"])
-                
-                u_keys = list(m_u_e.keys())
-                u_idx = list(m_u_e.values()).index(item_t["responsavel_id"]) if item_t["responsavel_id"] in list(m_u_e.values()) else 0
-                t_u_s = c2.selectbox("Responsável", u_keys, index=u_idx) if u_keys else None
-
-                c3, c4 = st.columns(2)
-                st_list = ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"]
-                t_st = c3.selectbox("Status", st_list, index=st_list.index(item_t["status"]) if item_t["status"] in st_list else 0)
-                pr_list = ["Baixa", "Média", "Alta", "Urgente"]
-                t_pr = c4.selectbox("Prioridade", pr_list, index=pr_list.index(item_t["prioridade"]) if item_t["prioridade"] in pr_list else 1)
-                
-                c5, c6 = st.columns(2)
-                cli_keys = list(m_cli_e.keys())
-                cli_idx = list(m_cli_e.values()).index(item_t["cliente_id"]) if item_t["cliente_id"] in list(m_cli_e.values()) else 0
-                t_cli_s = c5.selectbox("Cliente", cli_keys, index=cli_idx)
-                
-                vis_atual_idx = 0 if item_t["visibilidade"] == "Pública" else 1
-                t_vis_edit = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=vis_atual_idx)
-
-                t_proc = st.text_input("Processo", value=item_t["processo_ref"] if pd.notna(item_t["processo_ref"]) else "")
-                t_desc = st.text_area("Descrição", value=item_t["descricao"] if pd.notna(item_t["descricao"]) else "")
-                
-                if st.form_submit_button("Atualizar Tarefa"):
-                    novo_tp_id = m_tipos_e.get(t_tp_s, item_t["tipo_tarefa_id"])
-                    novo_u_id = m_u_e.get(t_u_s, item_t["responsavel_id"])
-                    novo_vis_val = "Pública" if "Pública" in t_vis_edit else "Privada"
-                    update_tarefa(tar_id, t_tit.strip(), t_desc.strip(), t_dt, t_pr, t_st, novo_u_id, m_cli_e[t_cli_s], t_proc.strip(), novo_tp_id, novo_vis_val)
-                    st.success("Tarefa atualizada!")
-                    st.rerun()
-            if st.button("🗑️ Excluir Tarefa", type="primary"):
-                delete_tarefa(tar_id)
-                st.success("Tarefa excluída!")
-                st.rerun()
-
-# ====================================================
-# MÓDULO 3: AGENDA DE COMPROMISSOS (BASE COMPARTILHADA)
-# ====================================================
-elif chave_modulo_ativo == "agenda":
-    st.title("📅 Fabíola Guimarães Advocacia — Agenda de Compromissos")
-    t_v, t_n, t_rec, t_g = st.tabs(["📆 Visualizar Agenda", "➕ Novo Compromisso", "🔄 Compromissos Recorrentes", "⚙️ Gerenciar / Alterar"])
-
-    with t_v:
-        c1, c2 = st.columns([3, 1])
-        with c2:
-            if st.button("⚡ Sincronizar Agenda", use_container_width=True):
-                sincronizar_todos_compromissos_recorrentes()
-                st.success("Ocorrências atualizadas!")
-                st.rerun()
-        df_cp = get_compromissos_df()
-        if df_cp.empty:
-            st.info("Nenhum compromisso agendado.")
-        else:
-            df_cp_v = df_cp[["id", "titulo", "data_inicio", "hora_inicio", "data_fim", "hora_fim", "local_link", "organizador", "cliente", "processo_ref", "descricao"]].copy()
-            df_cp_v["data_inicio"] = df_cp_v["data_inicio"].apply(formatar_data_br)
-            df_cp_v["data_fim"] = df_cp_v["data_fim"].apply(formatar_data_br)
-            st.dataframe(df_cp_v, use_container_width=True)
-
-    with t_n:
-        st.markdown("#### Agendar Compromisso")
-        u_df = get_usuarios(True)
-        cli_df = get_contatos("Cliente")
-        m_cli = {"(Nenhum)": None}
-        if not cli_df.empty:
-            m_cli.update(dict(zip(cli_df["nome"], cli_df["id"])))
-        with st.form("form_novo_comp", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            c_tit = c1.text_input("Título")
-            c_loc = c2.text_input("Local ou Link")
-            c3, c4, c5, c6 = st.columns(4)
-            d_ini = c3.date_input("Data Início", value=date.today(), format="DD/MM/YYYY")
-            h_ini = c4.time_input("Hora Início", value=time(9, 0))
-            d_fim = c5.date_input("Data Término", value=date.today(), format="DD/MM/YYYY")
-            h_fim = c6.time_input("Hora Término", value=time(10, 0))
-            c_cli = c1.selectbox("Cliente", list(m_cli.keys()))
-            c_proc = c2.text_input("Processo (Opcional)")
-            c_desc = st.text_area("Anotações")
-            if st.form_submit_button("Salvar Compromisso", type="primary"):
-                if c_tit.strip():
-                    add_compromisso(c_tit.strip(), c_desc.strip(), d_ini, h_ini.strftime("%H:%M"), d_fim, h_fim.strftime("%H:%M"), 0, c_loc.strip(), m_cli[c_cli], c_proc.strip(), operador_atual_id)
-                    st.success("Compromisso salvo!")
-                    st.rerun()
-
-    with t_rec:
-        st.markdown("#### Compromissos Periódicos da Agenda")
-        t_cr_in, t_cr_ls = st.tabs(["➕ Nova Regra", "📋 Regras Cadastradas"])
-        with t_cr_in:
-            with st.form("form_inc_comp_rec", clear_on_submit=True):
-                c1, c2, c3 = st.columns(3)
-                cr_tit = c1.text_input("Título")
-                cr_freq = c2.selectbox("Frequência", ["Semanal", "Diária", "Mensal", "Anual"])
-                cr_dt = c3.date_input("Data Início", value=date.today(), format="DD/MM/YYYY")
-                c4, c5 = st.columns(2)
-                cr_hr = c4.time_input("Horário", value=time(9, 0))
-                cr_dur = c5.number_input("Duração (Minutos)", min_value=15, max_value=480, value=60, step=15)
-                cr_loc = st.text_input("Local / Link")
-                if st.form_submit_button("Criar Regra de Repetição"):
-                    if cr_tit.strip():
-                        add_compromisso_recorrente(cr_tit.strip(), "", cr_freq, 1, cr_dt, cr_hr.strftime("%H:%M"), int(cr_dur), 0, cr_loc.strip(), None, "", operador_atual_id)
-                        st.success("Regra criada e ocorrências geradas!")
-                        st.rerun()
-        with t_cr_ls:
-            df_crec = get_compromissos_recorrentes()
-            if df_crec.empty:
-                st.info("Nenhuma regra de repetição de agenda cadastrada.")
-            else:
-                st.dataframe(df_crec[["id", "titulo", "frequencia", "data_inicio", "hora_inicio", "local_link"]], use_container_width=True)
-                cr_map = {f"ID {r['id']} | {r['titulo']}": r['id'] for _, r in df_crec.iterrows()}
-                c_del_id = cr_map[st.selectbox("Excluir Regra de Repetição", list(cr_map.keys()))]
-                if st.button("🗑️ Excluir Regra", type="primary"):
-                    delete_compromisso_recorrente(c_del_id)
-                    st.success("Regra excluída!")
-                    st.rerun()
-
-    with t_g:
-        df_cp_all = get_compromissos_df()
-        if df_cp_all.empty:
-            st.info("Nenhum compromisso para alterar.")
-        else:
-            cp_map = {f"ID {r['id']} | {r['titulo']} ({formatar_data_br(r['data_inicio'])})": r['id'] for _, r in df_cp_all.iterrows()}
-            comp_id = cp_map[st.selectbox("Selecione para Alterar", list(cp_map.keys()))]
-            item_c = df_cp_all[df_cp_all["id"] == comp_id].iloc[0]
-            with st.form("form_edit_comp"):
-                c1, c2 = st.columns(2)
-                ce_tit = c1.text_input("Título", value=item_c["titulo"])
-                ce_loc = c2.text_input("Local/Link", value=item_c["local_link"] if pd.notna(item_c["local_link"]) else "")
-                ce_dt = c1.date_input("Data", value=parse_data_iso(item_c["data_inicio"]), format="DD/MM/YYYY")
-                ce_hr = c2.time_input("Hora", value=parse_hora_str(item_c["hora_inicio"]))
-                ce_desc = st.text_area("Descrição", value=item_c["descricao"] if pd.notna(item_c["descricao"]) else "")
-                if st.form_submit_button("Atualizar"):
-                    update_compromisso(comp_id, ce_tit.strip(), ce_desc.strip(), ce_dt, ce_hr.strftime("%H:%M"), ce_dt, ce_hr.strftime("%H:%M"), 0, ce_loc.strip(), item_c["cliente_id"], item_c["processo_ref"])
-                    st.success("Atualizado!")
-                    st.rerun()
-            if st.button("🗑️ Excluir Compromisso", type="primary"):
-                delete_compromisso(comp_id)
-                st.success("Compromisso excluído!")
-                st.rerun()
-
-# ====================================================
-# MÓDULO 4: MANUTENÇÃO DE TABELAS (CRUDs GERAIS)
-# ====================================================
-elif chave_modulo_ativo == "tabelas":
+if modulo_apoio == "🛠️ Manutenção de Tabelas":
     st.title("🛠️ Manutenção de Tabelas e Cadastros")
     st.markdown("Gerencie centralizadamente todas as tabelas de apoio do escritório.")
     
@@ -1683,11 +1244,9 @@ elif chave_modulo_ativo == "tabelas":
                     delete_regra_classificacao(drg)
                     st.success("Excluído!")
                     st.rerun()
+    st.stop()
 
-# ====================================================
-# MÓDULO 5: USUÁRIOS
-# ====================================================
-elif chave_modulo_ativo == "usuarios":
+elif modulo_apoio == "👥 Gestão de Usuários":
     st.title("👥 Gestão de Usuários")
     u_ls, u_nc, u_ed, u_sn = st.tabs(["📋 Cadastrados", "➕ Novo Usuário", "✏️ Alterar / Excluir", "🔑 Minha Senha"])
     
@@ -1744,3 +1303,496 @@ elif chave_modulo_ativo == "usuarios":
                 else:
                     alterar_senha_usuario(operador_atual_id, s_nv)
                     st.success("Senha alterada com sucesso!")
+    st.stop()
+
+# ====================================================
+# SISTEMA 1: GESTÃO FINANCEIRA
+# ====================================================
+if st.session_state["sistema_selecionado"] == "financeiro":
+    st.title("💼 Gestão Financeira - Dra. Fabíola & Fabrício")
+
+    if menu_financeiro == "📊 Painel Geral":
+        st.subheader("Resumo Financeiro & Balanço Geral")
+        df = get_lancamentos_df()
+        if df.empty:
+            st.info("Nenhum lançamento registrado até o momento.")
+        else:
+            df["valor"] = pd.to_numeric(df["valor"])
+            c1, c2 = st.columns(2)
+            tf = c1.multiselect("Tipo", ["Receita", "Despesa"], default=["Receita", "Despesa"])
+            sf = c2.multiselect("Status", ["Concluído", "Pendente"], default=["Concluído", "Pendente"])
+            df_f = df[(df["tipo"].isin(tf)) & (df["status"].isin(sf))].copy()
+            rec = df_f[df_f["tipo"] == "Receita"]["valor"].sum()
+            desp = df_f[df_f["tipo"] == "Despesa"]["valor"].sum()
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Receitas", f"R$ {rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            m2.metric("Total Despesas", f"R$ {desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            m3.metric("Resultado Líquido", f"R$ {(rec - desp):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            st.divider()
+            st.subheader("⚖️ Acerto de Contas entre Sócios (50/50)")
+            desp_pagas = df[(df["tipo"] == "Despesa") & (df["status"] == "Concluído")]
+            t_fab = desp_pagas[desp_pagas["pago_por"] == "Fabrício"]["valor"].sum()
+            t_fabi = desp_pagas[desp_pagas["pago_por"] == "Fabíola"]["valor"].sum()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Pago por Fabrício", f"R$ {t_fab:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            col2.metric("Pago por Fabíola", f"R$ {t_fabi:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            dif = (t_fab - t_fabi) / 2
+            with col3:
+                if dif > 0:
+                    st.success(f"**Fabíola deve a Fabrício:** R$ {dif:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                elif dif < 0:
+                    st.info(f"**Fabrício deve a Fabíola:** R$ {abs(dif):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                else:
+                    st.success("**Contas perfeitamente equilibradas!**")
+            st.divider()
+            df_view = df_f[["id", "data_vencimento", "data_pagamento", "tipo", "contato", "conta_sintetica", "conta_analitica", "historico_padrao", "complemento", "valor", "status", "pago_por"]].copy()
+            df_view["data_vencimento"] = df_view["data_vencimento"].apply(formatar_data_br)
+            df_view["data_pagamento"] = df_view["data_pagamento"].apply(formatar_data_br)
+            st.dataframe(df_view, use_container_width=True)
+
+    elif menu_financeiro in ["🔴 Contas a Pagar", "🟢 Contas a Receber"]:
+        tipo_op = "Despesa" if "Pagar" in menu_financeiro else "Receita"
+        st.subheader(f"{'🔴 Contas a Pagar (Despesas)' if tipo_op == 'Despesa' else '🟢 Contas a Receber (Receitas)'}")
+        
+        tab_names = ["➕ Incluir", "✅ Baixa / Confirmação", "✏️ Alterar", "🗑️ Excluir"]
+        t1, t2, t3, t4 = st.tabs(tab_names)
+        
+        contatos_df = get_contatos("Fornecedor" if tipo_op == "Despesa" else "Cliente")
+        analiticas_df = get_contas_analiticas(tipo_op)
+        historicos_df = get_historicos(tipo_op)
+        map_cont = {"(Opcional)": None}
+        if not contatos_df.empty:
+            map_cont.update(dict(zip(contatos_df["nome"], contatos_df["id"])))
+        map_anal = dict(zip(analiticas_df["caminho_completo"], analiticas_df["id"])) if not analiticas_df.empty else {}
+        map_hist = {"(Sem histórico)": None}
+        if not historicos_df.empty:
+            map_hist.update({f"{r['codigo']} - {r['descricao']}": r['id'] for _, r in historicos_df.iterrows()})
+
+        with t1:
+            if not map_anal:
+                st.warning("Cadastre primeiro uma Conta Analítica.")
+            else:
+                with st.form(f"form_inc_{tipo_op}", clear_on_submit=True):
+                    c1, c2 = st.columns(2)
+                    dt_venc = c1.date_input("Data de Vencimento", value=date.today(), format="DD/MM/YYYY")
+                    val = c2.number_input("Valor (R$)", min_value=0.01, step=50.0, format="%.2f")
+                    cont_sel = c1.selectbox("Contato", list(map_cont.keys()))
+                    anal_sel = c2.selectbox("Classificação Analítica", list(map_anal.keys()))
+                    hist_sel = c1.selectbox("Histórico Padrão", list(map_hist.keys()))
+                    compl = c2.text_input("Complemento")
+                    c3, c4, c5 = st.columns(3)
+                    st_sel = c3.selectbox("Status", ["Pendente", "Concluído"])
+                    dt_pg = c4.date_input("Data Pagamento", value=date.today(), format="DD/MM/YYYY") if st_sel == "Concluído" else None
+                    pg_por = c5.selectbox("Pago por", SOCIOS) if (st_sel == "Concluído" and tipo_op == "Despesa") else None
+                    if st.form_submit_button("Salvar Título"):
+                        add_lancamento(tipo_op, dt_venc, val, map_cont[cont_sel], map_hist[hist_sel], map_anal[anal_sel], compl.strip(), st_sel, dt_pg, pg_por)
+                        st.success("Lançamento salvo com sucesso!")
+                        st.rerun()
+
+        with t2:
+            c1, c2 = st.columns(2)
+            d_ini = c1.date_input("Vencimento Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY", key=f"bx_ini_{tipo_op}")
+            d_fim = c2.date_input("Vencimento Final", value=date.today(), format="DD/MM/YYYY", key=f"bx_fim_{tipo_op}")
+            df_bx = get_lancamentos_df(tipo_op)
+            df_pend = df_bx[(df_bx["status"] == "Pendente") & (df_bx["data_vencimento"] >= str(d_ini)) & (df_bx["data_vencimento"] <= str(d_fim))].copy() if not df_bx.empty else pd.DataFrame()
+            if df_pend.empty:
+                st.info("Nenhum título pendente no período selecionado.")
+            else:
+                df_pend["Baixar?"] = False
+                df_pend["data_vencimento"] = df_pend["data_vencimento"].apply(formatar_data_br)
+                tb = st.data_editor(df_pend[["Baixar?", "id", "data_vencimento", "contato", "conta_analitica", "complemento", "valor"]], hide_index=True, use_container_width=True)
+                sel_ids = tb[tb["Baixar?"] == True]["id"].tolist()
+                if sel_ids:
+                    with st.form(f"form_bx_{tipo_op}"):
+                        c3, c4 = st.columns(2)
+                        dt_bx = c3.date_input("Data Efetiva", value=date.today(), format="DD/MM/YYYY")
+                        pg_s = c4.selectbox("Pago por", SOCIOS) if tipo_op == "Despesa" else None
+                        if st.form_submit_button(f"Confirmar Baixa ({len(sel_ids)} títulos)"):
+                            baixar_lancamentos_em_lote(sel_ids, dt_bx, pg_s)
+                            st.success("Baixa concluída com sucesso!")
+                            st.rerun()
+
+        with t3:
+            df_all = get_lancamentos_df(tipo_op)
+            if df_all.empty:
+                st.info("Nenhum lançamento cadastrado.")
+            else:
+                op_map = {f"ID {r['id']} | Venc: {formatar_data_br(r['data_vencimento'])} | R$ {r['valor']:.2f} | {r['contato']}": r['id'] for _, r in df_all.iterrows()}
+                l_id = op_map[st.selectbox("Selecione para Alterar", list(op_map.keys()), key=f"sel_alt_{tipo_op}")]
+                item = df_all[df_all["id"] == l_id].iloc[0]
+                with st.form(f"form_alt_item_{tipo_op}"):
+                    c1, c2 = st.columns(2)
+                    dt_v = c1.date_input("Vencimento", value=parse_data_iso(item["data_vencimento"]), format="DD/MM/YYYY")
+                    vl = c2.number_input("Valor (R$)", value=float(item["valor"]), step=50.0)
+                    cp = c1.text_input("Complemento", value=item["complemento"] if pd.notna(item["complemento"]) else "")
+                    st_e = c2.selectbox("Status", ["Pendente", "Concluído"], index=0 if item["status"] == "Pendente" else 1)
+                    dt_p = c1.date_input("Data Pagamento", value=parse_data_iso(item["data_pagamento"]), format="DD/MM/YYYY") if st_e == "Concluído" else None
+                    pg_e = c2.selectbox("Pago por", SOCIOS, index=SOCIOS.index(item["pago_por"]) if item["pago_por"] in SOCIOS else 0) if (st_e == "Concluído" and tipo_op == "Despesa") else None
+                    if st.form_submit_button("Atualizar Dados"):
+                        update_lancamento(l_id, tipo_op, dt_v, dt_p, vl, item["contato_id"], item["historico_id"], item["conta_analitica_id"], cp.strip(), st_e, pg_e)
+                        st.success("Atualizado!")
+                        st.rerun()
+
+        with t4:
+            df_all = get_lancamentos_df(tipo_op)
+            if not df_all.empty:
+                del_map = {f"ID {r['id']} | Venc: {formatar_data_br(r['data_vencimento'])} | R$ {r['valor']:.2f} | {r['contato']}": r['id'] for _, r in df_all.iterrows()}
+                d_id = del_map[st.selectbox("Selecione para Excluir", list(del_map.keys()), key=f"sel_del_{tipo_op}")]
+                if st.button("🗑️ Excluir Definitivamente", type="primary"):
+                    delete_lancamento(d_id)
+                    st.success("Excluído com sucesso!")
+                    st.rerun()
+
+    elif menu_financeiro == "⚡ Gerar Contas Mensais":
+        st.subheader("⚡ Geração Automática Mensal de Contas a Pagar")
+        st.markdown("Gera as faturas fixas recorrentes do mês com apenas um clique.")
+        c1, c2 = st.columns(2)
+        mes = c1.selectbox("Mês", list(range(1, 13)), index=date.today().month - 1)
+        ano = c2.number_input("Ano", min_value=2024, max_value=2040, value=date.today().year)
+        if st.button("Executar Geração de Contas", type="primary"):
+            g, ig, msg = gerar_contas_do_mes(ano, mes)
+            st.success(f"Concluído! {g} contas geradas, {ig} já existiam para este mês.")
+            st.rerun()
+
+    elif menu_financeiro == "📈 Relatórios Financeiros":
+        st.subheader("📊 Relatórios Financeiros Detalhados")
+        df_base = get_lancamentos_df()
+        if not df_base.empty:
+            df_base["valor"] = pd.to_numeric(df_base["valor"])
+            c1, c2 = st.columns(2)
+            d1 = c1.date_input("Início", value=date.today().replace(day=1), format="DD/MM/YYYY")
+            d2 = c2.date_input("Fim", value=date.today(), format="DD/MM/YYYY")
+            df_rel = df_base[(df_base["data_vencimento"] >= str(d1)) & (df_base["data_vencimento"] <= str(d2))]
+            st.dataframe(df_rel, use_container_width=True)
+            st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rel, "Financeiro"), file_name="relatorio_financeiro.xlsx", use_container_width=True)
+
+    elif menu_financeiro == "📁 Cadastros de Apoio":
+        st.subheader("📁 Cadastros Recorrentes e Regras do Financeiro")
+        t_rec, t_reg = st.tabs(["Contas Recorrentes", "Regras de Classificação"])
+        with t_rec:
+            st.dataframe(get_contas_recorrentes(), use_container_width=True)
+        with t_reg:
+            st.dataframe(get_regras_classificacao(), use_container_width=True)
+
+# ====================================================
+# SISTEMA 2: GESTÃO DE TAREFAS
+# ====================================================
+elif st.session_state["sistema_selecionado"] == "tarefas":
+    st.title("✅ Gestão de Tarefas - Fabíola Guimarães Advocacia")
+
+    if menu_tarefas == "📋 Quadro Geral":
+        c1, c2 = st.columns([3, 1])
+        with c2:
+            if st.button("⚡ Sincronizar Rotinas", use_container_width=True):
+                q = sincronizar_tarefas_recorrentes()
+                st.success(f"{q} nova(s) tarefa(s) gerada(s)!")
+                st.rerun()
+        df_tar = get_tarefas_df(operador_atual_id)
+        if df_tar.empty:
+            st.info("Nenhuma tarefa cadastrada ou visível no momento.")
+        else:
+            col1, col2, col3 = st.columns(3)
+            st_f = col1.multiselect("Status", ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"], default=["Não Iniciada", "Em Andamento"])
+            pr_f = col2.multiselect("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], default=["Baixa", "Média", "Alta", "Urgente"])
+            u_df = get_usuarios(True)
+            u_lista = ["Todos"] + u_df["nome"].tolist() if not u_df.empty else ["Todos"]
+            resp_f = col3.selectbox("Responsável", u_lista)
+            df_fil = df_tar[(df_tar["status"].isin(st_f)) & (df_tar["prioridade"].isin(pr_f))]
+            if resp_f != "Todos":
+                df_fil = df_fil[df_fil["responsavel"] == resp_f]
+            df_v = df_fil[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref", "descricao"]].copy()
+            df_v["data_limite"] = df_v["data_limite"].apply(formatar_data_br)
+            st.dataframe(df_v, use_container_width=True)
+
+    elif menu_tarefas == "➕ Nova Tarefa":
+        st.subheader("➕ Criar Nova Tarefa")
+        u_df = get_usuarios(True)
+        cli_df = get_contatos("Cliente")
+        tipos_df = get_tipos_tarefas()
+        if u_df.empty:
+            st.warning("Cadastre usuários primeiro.")
+        elif tipos_df.empty:
+            st.warning("Cadastre ao menos um Tipo de Tarefa em '🛠️ Tabelas & Usuários'.")
+        else:
+            m_u = dict(zip(u_df["nome"], u_df["id"]))
+            m_cli = {"(Nenhum)": None}
+            if not cli_df.empty:
+                m_cli.update(dict(zip(cli_df["nome"], cli_df["id"])))
+            m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
+
+            with st.form("form_nova_tarefa", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                tit = c1.text_input("Título da Tarefa")
+                dt_l = c2.date_input("Prazo Limite", value=date.today(), format="DD/MM/YYYY")
+                
+                resp_keys = list(m_u.keys())
+                def_idx = resp_keys.index(operador_atual_nome) if operador_atual_nome in resp_keys else 0
+                resp_s = c1.selectbox("Responsável", resp_keys, index=def_idx)
+                tipo_s = c2.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
+                
+                prio_s = c1.selectbox("Prioridade", ["Baixa", "Média", "Alta", "Urgente"], index=1)
+                cli_s = c2.selectbox("Cliente", list(m_cli.keys()))
+                
+                c3, c4 = st.columns(2)
+                vis_s = c3.selectbox(
+                    "Visibilidade da Tarefa",
+                    ["Pública (Visível a todos)", "Privada / Restrita"],
+                    index=0,
+                    help="Tarefas Públicas são vistas por todos. Tarefas Restritas são vistas apenas pelo Criador e pelo Responsável."
+                )
+                proc = c4.text_input("Processo (Opcional)")
+                desc = st.text_area("Descrição / Instruções")
+                
+                if st.form_submit_button("Salvar Tarefa", type="primary"):
+                    if tit.strip():
+                        val_vis = "Pública" if "Pública" in vis_s else "Privada"
+                        add_tarefa(tit.strip(), desc.strip(), dt_l, prio_s, m_u[resp_s], m_cli[cli_s], proc.strip(), m_tipos[tipo_s], operador_atual_id, visibilidade=val_vis)
+                        st.success("Tarefa cadastrada com sucesso!")
+                        st.rerun()
+                    else:
+                        st.warning("Informe o título da tarefa.")
+
+    elif menu_tarefas == "🔄 Rotinas Recorrentes":
+        st.subheader("🔄 Gestão de Rotinas Periódicas / Recorrentes")
+        t_rec_in, t_rec_ls = st.tabs(["➕ Nova Regra Recorrente", "📋 Regras Ativas"])
+        with t_rec_in:
+            u_df = get_usuarios(True)
+            tipos_df = get_tipos_tarefas()
+            if not u_df.empty and not tipos_df.empty:
+                m_u = dict(zip(u_df["nome"], u_df["id"]))
+                m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"]))
+                with st.form("form_inc_tar_rec", clear_on_submit=True):
+                    c1, c2, c3 = st.columns(3)
+                    tit_r = c1.text_input("Título da Rotina")
+                    freq_r = c2.selectbox("Frequência", ["Semanal", "Diária", "Mensal", "Anual"], index=0)
+                    dt_ini_r = c3.date_input("Início", value=date.today(), format="DD/MM/YYYY")
+                    
+                    c4, c5, c6 = st.columns(3)
+                    tipo_sr = c4.selectbox("Tipo de Tarefa", list(m_tipos.keys()))
+                    resp_sr = c5.selectbox("Responsável", list(m_u.keys()))
+                    vis_sr = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=0)
+                    
+                    desc_r = st.text_area("Instruções da Rotina")
+                    if st.form_submit_button("Criar Regra Recorrente"):
+                        if tit_r.strip():
+                            val_vis_r = "Pública" if "Pública" in vis_sr else "Privada"
+                            add_tarefa_recorrente(tit_r.strip(), desc_r.strip(), freq_r, 1, dt_ini_r, "Média", m_u[resp_sr], None, "", m_tipos[tipo_sr], operador_atual_id, visibilidade=val_vis_r)
+                            st.success("Regra criada com sucesso!")
+                            st.rerun()
+                        else:
+                            st.warning("Informe o título da rotina.")
+        with t_rec_ls:
+            df_recs = get_tarefas_recorrentes(operador_atual_id)
+            if df_recs.empty:
+                st.info("Nenhuma rotina recorrente cadastrada ou visível.")
+            else:
+                st.dataframe(df_recs[["id", "titulo", "tipo_tarefa", "visibilidade", "frequencia", "proxima_execucao", "responsavel"]], use_container_width=True)
+                r_map = {f"ID {r['id']} | {r['titulo']}": r['id'] for _, r in df_recs.iterrows()}
+                d_rid = r_map[st.selectbox("Excluir Regra", list(r_map.keys()))]
+                if st.button("🗑️ Excluir Regra de Recorrência", type="primary"):
+                    delete_tarefa_recorrente(d_rid)
+                    st.success("Regra removida!")
+                    st.rerun()
+
+    elif menu_tarefas == "📊 Relatórios de Tarefas":
+        st.subheader("📊 Relatórios e Gestão de Tarefas")
+        t_rel_aba, t_ger_aba = st.tabs(["📊 Filtros & Relatório", "✏️ Alterar / Excluir Tarefa"])
+        with t_rel_aba:
+            c1, c2, c3 = st.columns([1.5, 1.2, 1.3])
+            pf_dt = c1.radio("Período:", ["Todas", "Vencidas", "Hoje", "Amanhã", "Esta Semana", "Este Mês"], horizontal=True)
+            pf_st = c2.selectbox("Status:", ["Todas", "Pendentes (Ativas)", "Concluídas"])
+            u_df = get_usuarios(True)
+            resp_lista = ["Todos os Responsáveis", "👤 Minhas Tarefas"] + (u_df["nome"].tolist() if not u_df.empty else [])
+            pf_resp = c3.selectbox("Responsável:", resp_lista)
+            
+            df_tar_base = get_tarefas_df(operador_atual_id)
+            if not df_tar_base.empty:
+                df_rf = df_tar_base.copy()
+                hoje = date.today()
+                if pf_dt == "Hoje":
+                    df_rf = df_rf[df_rf["data_limite"] == str(hoje)]
+                elif pf_dt == "Amanhã":
+                    df_rf = df_rf[df_rf["data_limite"] == str(hoje + timedelta(days=1))]
+                elif pf_dt == "Vencidas":
+                    df_rf = df_rf[(df_rf["data_limite"] < str(hoje)) & (df_rf["status"] != "Concluída")]
+                elif pf_dt == "Esta Semana":
+                    ini_s = hoje - timedelta(days=hoje.weekday())
+                    df_rf = df_rf[(df_rf["data_limite"] >= str(ini_s)) & (df_rf["data_limite"] <= str(ini_s + timedelta(days=6)))]
+                elif pf_dt == "Este Mês":
+                    df_rf = df_rf[(df_rf["data_limite"] >= str(hoje.replace(day=1))) & (df_rf["data_limite"] <= str(hoje.replace(day=calendar.monthrange(hoje.year, hoje.month)[1])))]
+
+                if pf_st == "Pendentes (Ativas)":
+                    df_rf = df_rf[df_rf["status"].isin(["Não Iniciada", "Em Andamento"])]
+                elif pf_st == "Concluídas":
+                    df_rf = df_rf[df_rf["status"] == "Concluída"]
+
+                if pf_resp == "👤 Minhas Tarefas":
+                    df_rf = df_rf[df_rf["responsavel_id"] == operador_atual_id]
+                elif pf_resp != "Todos os Responsáveis":
+                    df_rf = df_rf[df_rf["responsavel"] == pf_resp]
+
+                st.metric("Total de Tarefas Filtradas", len(df_rf))
+                df_rf_view = df_rf[["id", "titulo", "tipo_tarefa", "visibilidade", "status", "prioridade", "data_limite", "responsavel", "criador", "cliente", "processo_ref"]].copy()
+                df_rf_view["data_limite"] = df_rf_view["data_limite"].apply(formatar_data_br)
+                st.dataframe(df_rf_view, use_container_width=True)
+                st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
+
+        with t_ger_aba:
+            df_tar_all = get_tarefas_df(operador_atual_id)
+            if df_tar_all.empty:
+                st.info("Nenhuma tarefa para gerenciar.")
+            else:
+                t_map = {f"ID {r['id']} | [{r['status']}] {r['titulo']} ({r['responsavel']})": r['id'] for _, r in df_tar_all.iterrows()}
+                tar_id = t_map[st.selectbox("Selecione a Tarefa", list(t_map.keys()))]
+                item_t = df_tar_all[df_tar_all["id"] == tar_id].iloc[0]
+                
+                tipos_tar = get_tipos_tarefas()
+                m_tipos_e = dict(zip(tipos_tar["nome"], tipos_tar["id"])) if not tipos_tar.empty else {}
+                u_df = get_usuarios(True)
+                m_u_e = dict(zip(u_df["nome"], u_df["id"])) if not u_df.empty else {}
+                cli_df = get_contatos("Cliente")
+                m_cli_e = {"(Nenhum)": None}
+                if not cli_df.empty:
+                    m_cli_e.update(dict(zip(cli_df["nome"], cli_df["id"])))
+
+                with st.form("form_edit_tar"):
+                    c1, c2 = st.columns(2)
+                    t_tit = c1.text_input("Título", value=item_t["titulo"])
+                    t_dt = c2.date_input("Prazo Limite", value=parse_data_iso(item_t["data_limite"]), format="DD/MM/YYYY")
+                    
+                    tp_keys = list(m_tipos_e.keys())
+                    tp_idx = list(m_tipos_e.values()).index(item_t["tipo_tarefa_id"]) if item_t["tipo_tarefa_id"] in list(m_tipos_e.values()) else 0
+                    t_tp_s = c1.selectbox("Tipo de Tarefa", tp_keys, index=tp_idx) if tp_keys else c1.selectbox("Tipo", ["(Sem tipos)"])
+                    
+                    u_keys = list(m_u_e.keys())
+                    u_idx = list(m_u_e.values()).index(item_t["responsavel_id"]) if item_t["responsavel_id"] in list(m_u_e.values()) else 0
+                    t_u_s = c2.selectbox("Responsável", u_keys, index=u_idx) if u_keys else None
+
+                    c3, c4 = st.columns(2)
+                    st_list = ["Não Iniciada", "Em Andamento", "Concluída", "Cancelada"]
+                    t_st = c3.selectbox("Status", st_list, index=st_list.index(item_t["status"]) if item_t["status"] in st_list else 0)
+                    pr_list = ["Baixa", "Média", "Alta", "Urgente"]
+                    t_pr = c4.selectbox("Prioridade", pr_list, index=pr_list.index(item_t["prioridade"]) if item_t["prioridade"] in pr_list else 1)
+                    
+                    c5, c6 = st.columns(2)
+                    cli_keys = list(m_cli_e.keys())
+                    cli_idx = list(m_cli_e.values()).index(item_t["cliente_id"]) if item_t["cliente_id"] in list(m_cli_e.values()) else 0
+                    t_cli_s = c5.selectbox("Cliente", cli_keys, index=cli_idx)
+                    
+                    vis_atual_idx = 0 if item_t["visibilidade"] == "Pública" else 1
+                    t_vis_edit = c6.selectbox("Visibilidade", ["Pública (Visível a todos)", "Privada / Restrita"], index=vis_atual_idx)
+
+                    t_proc = st.text_input("Processo", value=item_t["processo_ref"] if pd.notna(item_t["processo_ref"]) else "")
+                    t_desc = st.text_area("Descrição", value=item_t["descricao"] if pd.notna(item_t["descricao"]) else "")
+                    
+                    if st.form_submit_button("Atualizar Tarefa"):
+                        novo_tp_id = m_tipos_e.get(t_tp_s, item_t["tipo_tarefa_id"])
+                        novo_u_id = m_u_e.get(t_u_s, item_t["responsavel_id"])
+                        novo_vis_val = "Pública" if "Pública" in t_vis_edit else "Privada"
+                        update_tarefa(tar_id, t_tit.strip(), t_desc.strip(), t_dt, t_pr, t_st, novo_u_id, m_cli_e[t_cli_s], t_proc.strip(), novo_tp_id, novo_vis_val)
+                        st.success("Tarefa atualizada com sucesso!")
+                        st.rerun()
+                if st.button("🗑️ Excluir Tarefa", type="primary"):
+                    delete_tarefa(tar_id)
+                    st.success("Tarefa excluída com sucesso!")
+                    st.rerun()
+
+    elif menu_tarefas == "📅 Agenda de Compromissos":
+        st.subheader("📅 Agenda de Compromissos do Escritório")
+        t_v, t_n, t_rec, t_g = st.tabs(["📆 Visualizar Agenda", "➕ Novo Compromisso", "🔄 Repetições da Agenda", "⚙️ Alterar / Excluir"])
+
+        with t_v:
+            c1, c2 = st.columns([3, 1])
+            with c2:
+                if st.button("⚡ Sincronizar Agenda", use_container_width=True):
+                    sincronizar_todos_compromissos_recorrentes()
+                    st.success("Ocorrências atualizadas!")
+                    st.rerun()
+            df_cp = get_compromissos_df()
+            if df_cp.empty:
+                st.info("Nenhum compromisso agendado.")
+            else:
+                df_cp_v = df_cp[["id", "titulo", "data_inicio", "hora_inicio", "data_fim", "hora_fim", "local_link", "organizador", "cliente", "processo_ref", "descricao"]].copy()
+                df_cp_v["data_inicio"] = df_cp_v["data_inicio"].apply(formatar_data_br)
+                df_cp_v["data_fim"] = df_cp_v["data_fim"].apply(formatar_data_br)
+                st.dataframe(df_cp_v, use_container_width=True)
+
+        with t_n:
+            st.markdown("#### Agendar Compromisso")
+            u_df = get_usuarios(True)
+            cli_df = get_contatos("Cliente")
+            m_cli = {"(Nenhum)": None}
+            if not cli_df.empty:
+                m_cli.update(dict(zip(cli_df["nome"], cli_df["id"])))
+            with st.form("form_novo_comp", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                c_tit = c1.text_input("Título")
+                c_loc = c2.text_input("Local ou Link")
+                c3, c4, c5, c6 = st.columns(4)
+                d_ini = c3.date_input("Data Início", value=date.today(), format="DD/MM/YYYY")
+                h_ini = c4.time_input("Hora Início", value=time(9, 0))
+                d_fim = c5.date_input("Data Término", value=date.today(), format="DD/MM/YYYY")
+                h_fim = c6.time_input("Hora Término", value=time(10, 0))
+                c_cli = c1.selectbox("Cliente", list(m_cli.keys()))
+                c_proc = c2.text_input("Processo (Opcional)")
+                c_desc = st.text_area("Anotações")
+                if st.form_submit_button("Salvar Compromisso", type="primary"):
+                    if c_tit.strip():
+                        add_compromisso(c_tit.strip(), c_desc.strip(), d_ini, h_ini.strftime("%H:%M"), d_fim, h_fim.strftime("%H:%M"), 0, c_loc.strip(), m_cli[c_cli], c_proc.strip(), operador_atual_id)
+                        st.success("Compromisso salvo com sucesso!")
+                        st.rerun()
+
+        with t_rec:
+            st.markdown("#### Compromissos Periódicos da Agenda")
+            t_cr_in, t_cr_ls = st.tabs(["➕ Nova Regra", "📋 Regras Cadastradas"])
+            with t_cr_in:
+                with st.form("form_inc_comp_rec", clear_on_submit=True):
+                    c1, c2, c3 = st.columns(3)
+                    cr_tit = c1.text_input("Título")
+                    cr_freq = c2.selectbox("Frequência", ["Semanal", "Diária", "Mensal", "Anual"])
+                    cr_dt = c3.date_input("Data Início", value=date.today(), format="DD/MM/YYYY")
+                    c4, c5 = st.columns(2)
+                    cr_hr = c4.time_input("Horário", value=time(9, 0))
+                    cr_dur = c5.number_input("Duração (Minutos)", min_value=15, max_value=480, value=60, step=15)
+                    cr_loc = st.text_input("Local / Link")
+                    if st.form_submit_button("Criar Regra de Repetição"):
+                        if cr_tit.strip():
+                            add_compromisso_recorrente(cr_tit.strip(), "", cr_freq, 1, cr_dt, cr_hr.strftime("%H:%M"), int(cr_dur), 0, cr_loc.strip(), None, "", operador_atual_id)
+                            st.success("Regra criada e ocorrências geradas!")
+                            st.rerun()
+            with t_cr_ls:
+                df_crec = get_compromissos_recorrentes()
+                if df_crec.empty:
+                    st.info("Nenhuma regra de repetição de agenda cadastrada.")
+                else:
+                    st.dataframe(df_crec[["id", "titulo", "frequencia", "data_inicio", "hora_inicio", "local_link"]], use_container_width=True)
+                    cr_map = {f"ID {r['id']} | {r['titulo']}": r['id'] for _, r in df_crec.iterrows()}
+                    c_del_id = cr_map[st.selectbox("Excluir Regra de Repetição", list(cr_map.keys()))]
+                    if st.button("🗑️ Excluir Regra", type="primary"):
+                        delete_compromisso_recorrente(c_del_id)
+                        st.success("Regra excluída!")
+                        st.rerun()
+
+        with t_g:
+            df_cp_all = get_compromissos_df()
+            if df_cp_all.empty:
+                st.info("Nenhum compromisso para alterar.")
+            else:
+                cp_map = {f"ID {r['id']} | {r['titulo']} ({formatar_data_br(r['data_inicio'])})": r['id'] for _, r in df_cp_all.iterrows()}
+                comp_id = cp_map[st.selectbox("Selecione para Alterar", list(cp_map.keys()))]
+                item_c = df_cp_all[df_cp_all["id"] == comp_id].iloc[0]
+                with st.form("form_edit_comp"):
+                    c1, c2 = st.columns(2)
+                    ce_tit = c1.text_input("Título", value=item_c["titulo"])
+                    ce_loc = c2.text_input("Local/Link", value=item_c["local_link"] if pd.notna(item_c["local_link"]) else "")
+                    ce_dt = c1.date_input("Data", value=parse_data_iso(item_c["data_inicio"]), format="DD/MM/YYYY")
+                    ce_hr = c2.time_input("Hora", value=parse_hora_str(item_c["hora_inicio"]))
+                    ce_desc = st.text_area("Descrição", value=item_c["descricao"] if pd.notna(item_c["descricao"]) else "")
+                    if st.form_submit_button("Atualizar Compromisso"):
+                        update_compromisso(comp_id, ce_tit.strip(), ce_desc.strip(), ce_dt, ce_hr.strftime("%H:%M"), ce_dt, ce_hr.strftime("%H:%M"), 0, ce_loc.strip(), item_c["cliente_id"], item_c["processo_ref"])
+                        st.success("Atualizado!")
+                        st.rerun()
+                if st.button("🗑️ Excluir Compromisso", type="primary"):
+                    delete_compromisso(comp_id)
+                    st.success("Compromisso excluído!")
+                    st.rerun()
