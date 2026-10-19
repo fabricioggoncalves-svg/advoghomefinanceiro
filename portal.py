@@ -6,16 +6,6 @@ import calendar
 import hashlib
 from datetime import date, datetime, timedelta, time
 
-def to_excel_bytes(df, sheet_name="Relatorio"):
-    output = io.BytesIO()
-    try:
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name=sheet_name)
-        return output.getvalue()
-    except Exception:
-        # Se openpyxl não estiver disponível, gera CSV compatível com Excel
-        return df.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
-
 # ----------------------------------------------------
 # CONFIGURAÇÃO GERAL & SEGURANÇA
 # ----------------------------------------------------
@@ -79,10 +69,15 @@ def calcular_proxima_data(data_base: date, frequencia: str, intervalo: int = 1) 
     return data_base + timedelta(days=intervalo)
 
 def to_excel_bytes(df, sheet_name="Relatorio"):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-    return output.getvalue()
+    """Exporta para Excel nativo se openpyxl existir; caso contrário gera CSV compatível sem quebrar o app."""
+    try:
+        import openpyxl  # noqa: F401
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+        return output.getvalue()
+    except (ImportError, ModuleNotFoundError, Exception):
+        return df.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
 
 # ----------------------------------------------------
 # BANCO DE DADOS (SQLite)
@@ -94,7 +89,7 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
     
-    # 0. Usuários
+    # Usuários
     c.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,7 +149,7 @@ def init_db():
         )
     """)
 
-    # Tipos de Tarefas
+    # Tipos de Tarefas (Compartilhados)
     c.execute("""
         CREATE TABLE IF NOT EXISTS tipos_tarefas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,7 +157,7 @@ def init_db():
         )
     """)
 
-    # Tarefas Recorrentes (com coluna visibilidade)
+    # Tarefas Recorrentes
     c.execute("""
         CREATE TABLE IF NOT EXISTS tarefas_recorrentes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,7 +182,7 @@ def init_db():
         )
     """)
 
-    # Tarefas (com coluna visibilidade)
+    # Tarefas
     c.execute("""
         CREATE TABLE IF NOT EXISTS tarefas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,7 +207,7 @@ def init_db():
         )
     """)
 
-    # Migração segura para adicionar visibilidade se tabela já existir sem ela
+    # Migrações seguras de colunas
     c.execute("PRAGMA table_info(tarefas)")
     cols_t = [i[1] for i in c.fetchall()]
     if "visibilidade" not in cols_t:
