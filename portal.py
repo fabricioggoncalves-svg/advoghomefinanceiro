@@ -6,6 +6,16 @@ import calendar
 import hashlib
 from datetime import date, datetime, timedelta, time
 
+def to_excel_bytes(df, sheet_name="Relatorio"):
+    output = io.BytesIO()
+    try:
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+        return output.getvalue()
+    except Exception:
+        # Se openpyxl não estiver disponível, gera CSV compatível com Excel
+        return df.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
+
 # ----------------------------------------------------
 # CONFIGURAÇÃO GERAL & SEGURANÇA
 # ----------------------------------------------------
