@@ -321,7 +321,7 @@ def add_tipo_tarefa(nome):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO tipos_tarefas (nome) VALUES (?, ?)", (nome.strip(),))
+        c.execute("INSERT INTO tipos_tarefas (nome) VALUES (?)", (nome.strip(),))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -1616,7 +1616,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                         st.success("Tarefa alterada com sucesso!")
                         st.rerun()
 
-                # Botão separado de exclusão com confirmação
+                # Botão de exclusão com confirmação
                 col_exc1, col_exc2 = st.columns([1, 4])
                 with col_exc1:
                     if st.button("🗑️ Excluir Tarefa", type="secondary"):
