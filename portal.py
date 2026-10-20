@@ -216,6 +216,10 @@ def init_db():
     if "visibilidade" not in cols_tr:
         c.execute("ALTER TABLE tarefas_recorrentes ADD COLUMN visibilidade TEXT DEFAULT 'Pública'")
 
+    # Migração retroativa de dados antigos de visibilidade
+    c.execute("UPDATE tarefas SET visibilidade = 'Pública' WHERE visibilidade IS NULL OR visibilidade = 'Compartilhada'")
+    c.execute("UPDATE tarefas_recorrentes SET visibilidade = 'Pública' WHERE visibilidade IS NULL OR visibilidade = 'Compartilhada'")
+
     # Agenda
     c.execute("""
         CREATE TABLE IF NOT EXISTS compromissos_recorrentes (
@@ -1091,7 +1095,7 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
                 if df_sint_disp.empty:
                     st.warning("Cadastre primeiro uma Conta Sintética.")
                 else:
-                    msint = {f"[{r['tipo']}] {r['nome']}": r['id'] for _, r in df_sint_disp.iterrows()}
+                    msint = {f"[{r['tipo']}] {r['nome']}": r['id'] for _, r in df_sint.iterrows()}
                     with st.form("f_inc_anal", clear_on_submit=True):
                         psint = st.selectbox("Conta Sintética Pai", list(msint.keys()))
                         nan = st.text_input("Nome da Conta Analítica")
@@ -1709,7 +1713,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
             st.dataframe(df_rf_view, use_container_width=True)
             st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
 
-    # 4. Agenda de Compromissos
+    # 4. Agenda de Compromissos (com Modo Lista e Modo Agenda Calendário)
     elif menu_tarefas == "📅 Agenda de Compromissos":
         st.subheader("📅 Agenda de Compromissos do Escritório")
         t_v, t_n, t_rec, t_g = st.tabs(["📆 Visualizar Agenda", "➕ Novo Compromisso", "🔄 Repetições da Agenda", "⚙️ Alterar / Excluir"])
@@ -1721,14 +1725,88 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                     sincronizar_todos_compromissos_recorrentes()
                     st.success("Ocorrências atualizadas!")
                     st.rerun()
+
             df_cp = get_compromissos_df()
+
             if df_cp.empty:
-                st.info("Nenhum compromisso agendado.")
+                st.info("Nenhum compromisso agendado no escritório.")
             else:
-                df_cp_v = df_cp[["id", "titulo", "data_inicio", "hora_inicio", "data_fim", "hora_fim", "local_link", "organizador", "cliente", "processo_ref", "descricao"]].copy()
-                df_cp_v["data_inicio"] = df_cp_v["data_inicio"].apply(formatar_data_br)
-                df_cp_v["data_fim"] = df_cp_v["data_fim"].apply(formatar_data_br)
-                st.dataframe(df_cp_v, use_container_width=True)
+                tipo_visualizacao = st.radio(
+                    "Modo de Visualização:",
+                    ["📅 Visão Agenda (Cronológica / Calendário)", "📋 Lista / Tabela Detalhada"],
+                    horizontal=True
+                )
+
+                if tipo_visualizacao == "📋 Lista / Tabela Detalhada":
+                    df_cp_v = df_cp[["id", "titulo", "data_inicio", "hora_inicio", "data_fim", "hora_fim", "local_link", "organizador", "cliente", "processo_ref", "descricao"]].copy()
+                    df_cp_v["data_inicio"] = df_cp_v["data_inicio"].apply(formatar_data_br)
+                    df_cp_v["data_fim"] = df_cp_v["data_fim"].apply(formatar_data_br)
+                    st.dataframe(df_cp_v, use_container_width=True)
+                
+                else:
+                    # MODO AGENDA
+                    col_ag1, col_ag2 = st.columns([2, 2])
+                    filtro_tempo = col_ag1.selectbox(
+                        "Período:",
+                        ["Todos os Compromissos Futuros", "Próximos 7 Dias", "Este Mês", "Todos os Registros"]
+                    )
+                    
+                    df_agenda = df_cp.copy()
+                    df_agenda["dt_inicio_obj"] = pd.to_datetime(df_agenda["data_inicio"]).dt.date
+                    hoje = date.today()
+
+                    if filtro_tempo == "Todos os Compromissos Futuros":
+                        df_agenda = df_agenda[df_agenda["dt_inicio_obj"] >= hoje]
+                    elif filtro_tempo == "Próximos 7 Dias":
+                        df_agenda = df_agenda[(df_agenda["dt_inicio_obj"] >= hoje) & (df_agenda["dt_inicio_obj"] <= hoje + timedelta(days=7))]
+                    elif filtro_tempo == "Este Mês":
+                        df_agenda = df_agenda[
+                            (df_agenda["dt_inicio_obj"] >= hoje.replace(day=1)) &
+                            (df_agenda["dt_inicio_obj"] <= hoje.replace(day=calendar.monthrange(hoje.year, hoje.month)[1]))
+                        ]
+
+                    df_agenda = df_agenda.sort_values(by=["dt_inicio_obj", "hora_inicio"])
+
+                    if df_agenda.empty:
+                        st.info("Nenhum compromisso encontrado para o período selecionado.")
+                    else:
+                        dias_semana_pt = {
+                            0: "Segunda-feira", 1: "Terça-feira", 2: "Quarta-feira",
+                            3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"
+                        }
+
+                        # Agrupa compromissos por dia
+                        grupos_por_data = df_agenda.groupby("dt_inicio_obj")
+                        
+                        for dt_grupo, grupo in grupos_por_data:
+                            dia_semana = dias_semana_pt[dt_grupo.weekday()]
+                            str_data = dt_grupo.strftime("%d/%m/%Y")
+                            
+                            badge_hoje = " 🔴 (HOJE)" if dt_grupo == hoje else ""
+                            st.markdown(f"#### 🗓️ **{dia_semana}, {str_data}**{badge_hoje}")
+
+                            for _, row in grupo.iterrows():
+                                h_ini = row["hora_inicio"] if pd.notna(row["hora_inicio"]) else "Dia Inteiro"
+                                h_fim = f" até {row['hora_fim']}" if pd.notna(row["hora_fim"]) else ""
+                                horario_str = f"⏰ {h_ini}{h_fim}" if h_ini != "Dia Inteiro" else "📅 O dia todo"
+
+                                cliente_str = f" | 👤 Cliente: **{row['cliente']}**" if pd.notna(row["cliente"]) else ""
+                                proc_str = f" | 📄 Processo: `{row['processo_ref']}`" if pd.notna(row["processo_ref"]) and row["processo_ref"] else ""
+                                loc_str = f" | 📍 Local/Link: [{row['local_link']}]({row['local_link']})" if pd.notna(row["local_link"]) and str(row["local_link"]).startswith("http") else (f" | 📍 Local: {row['local_link']}" if pd.notna(row["local_link"]) and row["local_link"] else "")
+
+                                st.markdown(
+                                    f"""
+                                    <div style="border-left: 4px solid #1f77b4; padding: 10px 15px; margin-bottom: 12px; background-color: rgba(31, 119, 180, 0.05); border-radius: 4px;">
+                                        <div style="font-size: 15px; font-weight: 600; color: #1E3A8A;">{row['titulo']}</div>
+                                        <div style="font-size: 13px; color: #555; margin-top: 4px;">
+                                            <strong>{horario_str}</strong> | 👤 Organizador: {row['organizador']}{cliente_str}{proc_str}{loc_str}
+                                        </div>
+                                        {f'<div style="font-size: 12px; color: #666; margin-top: 6px;"><em>{row["descricao"]}</em></div>' if pd.notna(row["descricao"]) and row["descricao"] else ''}
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True
+                                )
+                            st.markdown("---")
 
         with t_n:
             st.markdown("#### Agendar Compromisso")
