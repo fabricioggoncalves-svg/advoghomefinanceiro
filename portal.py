@@ -217,7 +217,6 @@ def init_db():
     if "visibilidade" not in cols_tr:
         c.execute("ALTER TABLE tarefas_recorrentes ADD COLUMN visibilidade TEXT DEFAULT 'Pública'")
 
-    # Migração retroativa de dados antigos de visibilidade
     c.execute("UPDATE tarefas SET visibilidade = 'Pública' WHERE visibilidade IS NULL OR visibilidade = 'Compartilhada'")
     c.execute("UPDATE tarefas_recorrentes SET visibilidade = 'Pública' WHERE visibilidade IS NULL OR visibilidade = 'Compartilhada'")
 
@@ -444,7 +443,9 @@ def add_contato(nome, tipo):
     c = conn.cursor()
     c.execute("INSERT INTO contatos (nome, tipo) VALUES (?, ?)", (nome.strip(), tipo))
     conn.commit()
+    novo_id = c.lastrowid
     conn.close()
+    return novo_id
 
 def update_contato(contato_id, nome):
     conn = get_connection()
@@ -466,35 +467,49 @@ def delete_contato(contato_id):
     conn.commit()
     conn.close()
 
+# --- Funções: Históricos Padrão com Código Automático ---
 def get_historicos(tipo=None):
     conn = get_connection()
     q = "SELECT id, codigo, descricao, tipo_aplicavel FROM historicos_padrao"
     if tipo:
         q += f" WHERE tipo_aplicavel = '{tipo}' OR tipo_aplicavel = 'Ambos'"
-    q += " ORDER BY codigo ASC"
+    q += " ORDER BY id ASC"
     df = pd.read_sql_query(q, conn)
     conn.close()
     return df
 
-def add_historico(codigo, descricao, tipo_aplicavel):
+def gerar_proximo_codigo_historico():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT MAX(id) FROM historicos_padrao")
+    max_id = c.fetchone()[0] or 0
+    conn.close()
+    return f"HP{max_id + 1:03d}"
+
+def add_historico_auto(descricao, tipo_aplicavel):
+    codigo = gerar_proximo_codigo_historico()
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO historicos_padrao (codigo, descricao, tipo_aplicavel) VALUES (?, ?, ?)", (codigo.strip().upper(), descricao.strip(), tipo_aplicavel))
+        c.execute("INSERT INTO historicos_padrao (codigo, descricao, tipo_aplicavel) VALUES (?, ?, ?)", (codigo, descricao.strip(), tipo_aplicavel))
         conn.commit()
-        return True
+        return True, codigo
     except sqlite3.IntegrityError:
-        return False
+        return False, None
     finally:
         conn.close()
 
-def update_historico(hist_id, codigo, descricao, tipo_aplicavel):
+def update_historico(hist_id, descricao, tipo_aplicavel):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE historicos_padrao SET codigo = ?, descricao = ?, tipo_aplicavel = ? WHERE id = ?", (codigo.strip().upper(), descricao.strip(), tipo_aplicavel, hist_id))
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        c.execute("UPDATE historicos_padrao SET descricao = ?, tipo_aplicavel = ? WHERE id = ?", (descricao.strip(), tipo_aplicavel, hist_id))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
 
 def delete_historico(hist_id):
     conn = get_connection()
@@ -988,13 +1003,9 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
 with st.sidebar.expander("🛠️ Tabelas & Usuários"):
     modulo_apoio = st.radio("Selecione:", ["Nenhum", "🛠️ Manutenção de Tabelas", "👥 Gestão de Usuários"], index=0)
 
-# ----------------------------------------------------
-# CONTINGÊNCIA: BACKUP E RESTAURAÇÃO NO RODAPÉ LATERAL
-# ----------------------------------------------------
+# Contingência: Backup e Restauração
 with st.sidebar.expander("💾 Backup & Restauração do Banco"):
     st.caption("Salve seus lançamentos antes de atualizar o código no GitHub.")
-    
-    # 1. Download do Banco Atual
     if os.path.exists(DB_NAME):
         with open(DB_NAME, "rb") as f_db:
             st.download_button(
@@ -1004,7 +1015,6 @@ with st.sidebar.expander("💾 Backup & Restauração do Banco"):
                 mime="application/x-sqlite3",
                 use_container_width=True
             )
-    
     st.markdown("---")
     st.caption("Restaurar dados caso o app reinicie zerado:")
     uploaded_db = st.file_uploader("Enviar financeiro.db", type=["db", "sqlite"], label_visibility="collapsed")
@@ -1034,14 +1044,14 @@ if st.sidebar.button("🚪 Sair do Sistema", use_container_width=True):
     st.rerun()
 
 # ====================================================
-# MÓDULOS DE APOIO (SE ATIVADOS)
+# MÓDULOS DE APOIO: MANUTENÇÃO DE TABELAS (SEM REGRAS)
 # ====================================================
 if modulo_apoio == "🛠️ Manutenção de Tabelas":
     st.title("🛠️ Manutenção de Tabelas e Cadastros")
     st.markdown("Gerencie centralizadamente todas as tabelas de apoio do escritório.")
     
-    t_tipos, t_plano, t_hist, t_cont, t_regras = st.tabs([
-        "🏷️ Tipos de Tarefas", "🌳 Plano de Contas", "📑 Históricos Padrão", "👥 Clientes e Fornecedores", "⚙️ Regras de Classificação"
+    t_tipos, t_plano, t_hist, t_cont = st.tabs([
+        "🏷️ Tipos de Tarefas", "🌳 Plano de Contas", "📑 Históricos Padrão", "👥 Clientes e Fornecedores"
     ])
 
     with t_tipos:
@@ -1158,18 +1168,21 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
             st.dataframe(get_contas_analiticas(), use_container_width=True)
 
     with t_hist:
-        st.subheader("Históricos Padrão")
+        st.subheader("Históricos Padrão (Código Automático)")
         h1, h2, h3 = st.tabs(["➕ Incluir", "✏️ Alterar", "🗑️ Excluir"])
         with h1:
+            prox_cod = gerar_proximo_codigo_historico()
+            st.info(f"O próximo código gerado automaticamente será: **{prox_cod}**")
             with st.form("f_inc_h", clear_on_submit=True):
-                c1, c2 = st.columns(2)
-                cod_h = c1.text_input("Código")
-                tp_h = c2.selectbox("Aplica-se a", ["Receita", "Despesa", "Ambos"])
-                desc_h = st.text_input("Descrição")
-                if st.form_submit_button("Salvar") and cod_h.strip() and desc_h.strip():
-                    if add_historico(cod_h, desc_h, tp_h):
-                        st.success("Cadastrado!")
+                tp_h = st.selectbox("Aplica-se a", ["Receita", "Despesa", "Ambos"])
+                desc_h = st.text_input("Descrição do Histórico")
+                if st.form_submit_button("Salvar Histórico") and desc_h.strip():
+                    sucesso, cod_gerado = add_historico_auto(desc_h, tp_h)
+                    if sucesso:
+                        st.success(f"Histórico cadastrado com sucesso com o código **{cod_gerado}**!")
                         st.rerun()
+                    else:
+                        st.error("Erro ao gerar código ou registrar histórico.")
         with h2:
             df_h = get_historicos()
             if not df_h.empty:
@@ -1178,13 +1191,15 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
                 it_h = df_h[df_h["id"] == mh[sh]].iloc[0]
                 with st.form("f_alt_h"):
                     c1, c2 = st.columns(2)
-                    ncod = c1.text_input("Código", value=it_h["codigo"])
+                    c1.text_input("Código (Automático / Bloqueado)", value=it_h["codigo"], disabled=True)
                     ntp = c2.selectbox("Tipo", ["Receita", "Despesa", "Ambos"], index=["Receita", "Despesa", "Ambos"].index(it_h["tipo_aplicavel"]))
                     ndesc = st.text_input("Descrição", value=it_h["descricao"])
-                    if st.form_submit_button("Atualizar") and ncod.strip() and ndesc.strip():
-                        update_historico(it_h["id"], ncod, ndesc, ntp)
-                        st.success("Atualizado!")
-                        st.rerun()
+                    if st.form_submit_button("Salvar Alteração") and ndesc.strip():
+                        if update_historico(it_h["id"], ndesc, ntp):
+                            st.success("Histórico alterado com sucesso!")
+                            st.rerun()
+                        else:
+                            st.error("Erro ao salvar alterações no histórico.")
         with h3:
             df_h = get_historicos()
             if not df_h.empty:
@@ -1192,7 +1207,7 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
                 dh = mh[st.selectbox("Selecione para Excluir", list(mh.keys()), key="del_h")]
                 if st.button("Excluir Histórico", type="primary"):
                     delete_historico(dh)
-                    st.success("Excluído!")
+                    st.success("Excluído com sucesso!")
                     st.rerun()
         st.dataframe(get_historicos(), use_container_width=True)
 
@@ -1207,7 +1222,7 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
                         nm_c = st.text_input(f"Nome do {t_ent}")
                         if st.form_submit_button("Salvar") and nm_c.strip():
                             add_contato(nm_c.strip(), t_ent)
-                            st.success("Salvo!")
+                            st.success("Salvo com sucesso!")
                             st.rerun()
                 with c2:
                     df_c = get_contatos(t_ent)
@@ -1230,37 +1245,6 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
                             st.success("Excluído!")
                             st.rerun()
                 st.dataframe(get_contatos(t_ent), use_container_width=True)
-
-    with t_regras:
-        st.subheader("Regras de Classificação Automática")
-        r1, r2 = st.tabs(["➕ Incluir", "📋 Cadastradas"])
-        df_an = get_contas_analiticas()
-        with r1:
-            if df_an.empty:
-                st.warning("Cadastre primeiro uma Conta Analítica.")
-            else:
-                man = dict(zip(df_an["caminho_completo"], df_an["id"]))
-                with st.form("f_inc_regra", clear_on_submit=True):
-                    c1, c2 = st.columns(2)
-                    ptxt = c1.text_input("Palavra-Chave / Padrão de Texto (ex: copasa, cemig)")
-                    an_s = c2.selectbox("Classificação Analítica", list(man.keys()))
-                    it_an = df_an[df_an["id"] == man[an_s]].iloc[0]
-                    if st.form_submit_button("Salvar Regra") and ptxt.strip():
-                        if add_regra_classificacao(ptxt.strip(), it_an["tipo"], it_an["sintetica_id"], it_an["id"]):
-                            st.success("Regra cadastrada!")
-                            st.rerun()
-        with r2:
-            df_rg = get_regras_classificacao()
-            if df_rg.empty:
-                st.info("Nenhuma regra cadastrada.")
-            else:
-                st.dataframe(df_rg[["id", "padrao_texto", "tipo", "categoria", "subcategoria"]], use_container_width=True)
-                mrg = {f"'{r['padrao_texto']}' ➔ {r['subcategoria']}": r['id'] for _, r in df_rg.iterrows()}
-                drg = mrg[st.selectbox("Excluir Regra", list(mrg.keys()))]
-                if st.button("🗑️ Excluir Regra", type="primary"):
-                    delete_regra_classificacao(drg)
-                    st.success("Excluído!")
-                    st.rerun()
     st.stop()
 
 elif modulo_apoio == "👥 Gestão de Usuários":
@@ -1369,12 +1353,13 @@ if st.session_state["sistema_selecionado"] == "financeiro":
 
     elif menu_financeiro in ["🔴 Contas a Pagar", "🟢 Contas a Receber"]:
         tipo_op = "Despesa" if "Pagar" in menu_financeiro else "Receita"
+        tipo_contato = "Fornecedor" if tipo_op == "Despesa" else "Cliente"
         st.subheader(f"{'🔴 Contas a Pagar (Despesas)' if tipo_op == 'Despesa' else '🟢 Contas a Receber (Receitas)'}")
         
         tab_names = ["➕ Incluir", "✅ Baixa / Confirmação", "✏️ Alterar", "🗑️ Excluir"]
         t1, t2, t3, t4 = st.tabs(tab_names)
         
-        contatos_df = get_contatos("Fornecedor" if tipo_op == "Despesa" else "Cliente")
+        contatos_df = get_contatos(tipo_contato)
         analiticas_df = get_contas_analiticas(tipo_op)
         historicos_df = get_historicos(tipo_op)
         map_cont = {"(Opcional)": None}
@@ -1386,6 +1371,28 @@ if st.session_state["sistema_selecionado"] == "financeiro":
             map_hist.update({f"{r['codigo']} - {r['descricao']}": r['id'] for _, r in historicos_df.iterrows()})
 
         with t1:
+            # Inclusão Rápida de Tabelas Externas (FKs)
+            with st.expander(f"➕ Cadastrar Novo {tipo_contato} ou Conta Analítica"):
+                c_fk1, c_fk2 = st.columns(2)
+                with c_fk1:
+                    novo_cont_nome = st.text_input(f"Nome do Novo {tipo_contato}:", key=f"novo_cont_inline_{tipo_op}")
+                    if st.button(f"Salvar {tipo_contato}", key=f"btn_salvar_cont_{tipo_op}"):
+                        if novo_cont_nome.strip():
+                            add_contato(novo_cont_nome.strip(), tipo_contato)
+                            st.success(f"{tipo_contato} cadastrado com sucesso!")
+                            st.rerun()
+                with c_fk2:
+                    sint_disp = get_contas_sinteticas(tipo_op)
+                    if not sint_disp.empty:
+                        m_sint_fk = dict(zip(sint_disp["nome"], sint_disp["id"]))
+                        sint_pai_fk = st.selectbox("Conta Sintética Pai:", list(m_sint_fk.keys()), key=f"sint_pai_fk_{tipo_op}")
+                        nova_anal_nome = st.text_input("Nova Conta Analítica:", key=f"nova_anal_fk_{tipo_op}")
+                        if st.button("Salvar Conta Analítica", key=f"btn_salvar_anal_{tipo_op}"):
+                            if nova_anal_nome.strip():
+                                add_conta_analitica(m_sint_fk[sint_pai_fk], nova_anal_nome.strip())
+                                st.success("Conta Analítica cadastrada com sucesso!")
+                                st.rerun()
+
             if not map_anal:
                 st.warning("Cadastre primeiro uma Conta Analítica.")
             else:
@@ -1393,7 +1400,7 @@ if st.session_state["sistema_selecionado"] == "financeiro":
                     c1, c2 = st.columns(2)
                     dt_venc = c1.date_input("Data de Vencimento", value=date.today(), format="DD/MM/YYYY")
                     val = c2.number_input("Valor (R$)", min_value=0.01, step=50.0, format="%.2f")
-                    cont_sel = c1.selectbox("Contato", list(map_cont.keys()))
+                    cont_sel = c1.selectbox(tipo_contato, list(map_cont.keys()))
                     anal_sel = c2.selectbox("Classificação Analítica", list(map_anal.keys()))
                     hist_sel = c1.selectbox("Histórico Padrão", list(map_hist.keys()))
                     compl = c2.text_input("Complemento")
@@ -1497,7 +1504,6 @@ if st.session_state["sistema_selecionado"] == "financeiro":
 elif st.session_state["sistema_selecionado"] == "tarefas":
     st.title("✅ Gestão de Tarefas - Fabíola Guimarães Advocacia")
 
-    # 1. Painel Geral: Tela Única de Consultar / Incluir / Alterar / Excluir
     if menu_tarefas == "📋 Painel Geral":
         u_df = get_usuarios(True)
         cli_df = get_contatos("Cliente")
@@ -1510,13 +1516,30 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
         m_tipos = dict(zip(tipos_df["nome"], tipos_df["id"])) if not tipos_df.empty else {}
 
         # ----------------------------------------------------
-        # PARTE SUPERIOR: INCLUSÃO RÁPIDA (EXPANSÍVEL)
+        # PARTE SUPERIOR: INCLUSÃO RÁPIDA (EXPANSÍVEL) + CADASTRO DE FKs
         # ----------------------------------------------------
         with st.expander("➕ Nova Tarefa (Clique para expandir e cadastrar)", expanded=False):
+            with st.expander("➕ Cadastrar Novo Tipo de Tarefa ou Novo Cliente"):
+                cfk_t1, cfk_t2 = st.columns(2)
+                with cfk_t1:
+                    novo_tipo_inline = st.text_input("Novo Tipo de Tarefa:", key="novo_tipo_inline_tar")
+                    if st.button("Salvar Tipo de Tarefa", key="btn_salvar_tipo_tar"):
+                        if novo_tipo_inline.strip():
+                            add_tipo_tarefa(novo_tipo_inline.strip())
+                            st.success("Tipo cadastrado com sucesso!")
+                            st.rerun()
+                with cfk_t2:
+                    novo_cli_inline = st.text_input("Novo Cliente:", key="novo_cli_inline_tar")
+                    if st.button("Salvar Cliente", key="btn_salvar_cli_tar"):
+                        if novo_cli_inline.strip():
+                            add_contato(novo_cli_inline.strip(), "Cliente")
+                            st.success("Cliente cadastrado com sucesso!")
+                            st.rerun()
+
             if u_df.empty:
                 st.warning("Cadastre usuários primeiro.")
             elif tipos_df.empty:
-                st.warning("Cadastre ao menos um Tipo de Tarefa em '🛠️ Tabelas & Usuários'.")
+                st.warning("Cadastre ao menos um Tipo de Tarefa acima.")
             else:
                 with st.form("form_inc_tarefa_tela_unica", clear_on_submit=True):
                     c1, c2 = st.columns(2)
@@ -1566,7 +1589,6 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
         if df_tar.empty:
             st.info("Nenhuma tarefa visível para o seu usuário no momento.")
         else:
-            # Aplicação dos filtros
             df_fil = df_tar[(df_tar["status"].isin(st_f)) & (df_tar["prioridade"].isin(pr_f))].copy()
             if resp_f != "Todos":
                 df_fil = df_fil[df_fil["responsavel"] == resp_f]
@@ -1576,9 +1598,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                     df_fil["descricao"].str.contains(txt_busca, case=False, na=False)
                 ]
 
-            # ----------------------------------------------------
-            # LISTAGEM COM CHECKBOX DO LADO ESQUERDO
-            # ----------------------------------------------------
+            # Listagem com Checkbox
             df_tabela = df_fil.copy()
             df_tabela.insert(0, "Selecionar", False)
             df_tabela["Prazo"] = df_tabela["data_limite"].apply(formatar_data_br)
@@ -1595,7 +1615,6 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                 key="editor_tarefas_selecao"
             )
 
-            # Identifica a tarefa marcada
             selecionadas = tabela_editada[tabela_editada["Selecionar"] == True]
 
             # ----------------------------------------------------
@@ -1649,7 +1668,6 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                         st.success("Tarefa alterada com sucesso!")
                         st.rerun()
 
-                # Botão de exclusão com confirmação
                 col_exc1, col_exc2 = st.columns([1, 4])
                 with col_exc1:
                     if st.button("🗑️ Excluir Tarefa", type="secondary"):
@@ -1742,7 +1760,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
             st.dataframe(df_rf_view, use_container_width=True)
             st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
 
-    # 4. Agenda de Compromissos (Modo Lista e Modo Agenda Calendário)
+    # 4. Agenda de Compromissos
     elif menu_tarefas == "📅 Agenda de Compromissos":
         st.subheader("📅 Agenda de Compromissos do Escritório")
         t_v, t_n, t_rec, t_g = st.tabs(["📆 Visualizar Agenda", "➕ Novo Compromisso", "🔄 Repetições da Agenda", "⚙️ Alterar / Excluir"])
