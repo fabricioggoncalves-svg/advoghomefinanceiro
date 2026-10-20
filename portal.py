@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import io
+import os
 import calendar
 import hashlib
 from datetime import date, datetime, timedelta, time
@@ -936,7 +937,7 @@ operador_atual_id = usuario_logado["id"]
 operador_atual_nome = usuario_logado["nome"]
 
 # ----------------------------------------------------
-# BARRA LATERAL APRIMORADA (SISTEMAS + SUBMENUS + RODAPÉ)
+# BARRA LATERAL (SISTEMAS + SUBMENUS + BACKUP + RODAPÉ)
 # ----------------------------------------------------
 if "sistema_selecionado" not in st.session_state:
     st.session_state["sistema_selecionado"] = "financeiro"
@@ -986,6 +987,34 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
 
 with st.sidebar.expander("🛠️ Tabelas & Usuários"):
     modulo_apoio = st.radio("Selecione:", ["Nenhum", "🛠️ Manutenção de Tabelas", "👥 Gestão de Usuários"], index=0)
+
+# ----------------------------------------------------
+# CONTINGÊNCIA: BACKUP E RESTAURAÇÃO NO RODAPÉ LATERAL
+# ----------------------------------------------------
+with st.sidebar.expander("💾 Backup & Restauração do Banco"):
+    st.caption("Salve seus lançamentos antes de atualizar o código no GitHub.")
+    
+    # 1. Download do Banco Atual
+    if os.path.exists(DB_NAME):
+        with open(DB_NAME, "rb") as f_db:
+            st.download_button(
+                label="📥 Baixar Backup (financeiro.db)",
+                data=f_db.read(),
+                file_name=f"financeiro_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.db",
+                mime="application/x-sqlite3",
+                use_container_width=True
+            )
+    
+    st.markdown("---")
+    st.caption("Restaurar dados caso o app reinicie zerado:")
+    uploaded_db = st.file_uploader("Enviar financeiro.db", type=["db", "sqlite"], label_visibility="collapsed")
+    if uploaded_db is not None:
+        if st.button("📤 Confirmar Restauração", use_container_width=True):
+            with open(DB_NAME, "wb") as f_out:
+                f_out.write(uploaded_db.getbuffer())
+            init_db()
+            st.success("Banco restaurado com sucesso!")
+            st.rerun()
 
 # Rodapé da Barra Lateral
 st.sidebar.markdown("---")
@@ -1095,7 +1124,7 @@ if modulo_apoio == "🛠️ Manutenção de Tabelas":
                 if df_sint_disp.empty:
                     st.warning("Cadastre primeiro uma Conta Sintética.")
                 else:
-                    msint = {f"[{r['tipo']}] {r['nome']}": r['id'] for _, r in df_sint.iterrows()}
+                    msint = {f"[{r['tipo']}] {r['nome']}": r['id'] for _, r in df_sint_disp.iterrows()}
                     with st.form("f_inc_anal", clear_on_submit=True):
                         psint = st.selectbox("Conta Sintética Pai", list(msint.keys()))
                         nan = st.text_input("Nome da Conta Analítica")
@@ -1713,7 +1742,7 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
             st.dataframe(df_rf_view, use_container_width=True)
             st.download_button("Exportar (.XLSX)", data=to_excel_bytes(df_rf_view, "Tarefas"), file_name="relatorio_tarefas.xlsx", use_container_width=True)
 
-    # 4. Agenda de Compromissos (com Modo Lista e Modo Agenda Calendário)
+    # 4. Agenda de Compromissos (Modo Lista e Modo Agenda Calendário)
     elif menu_tarefas == "📅 Agenda de Compromissos":
         st.subheader("📅 Agenda de Compromissos do Escritório")
         t_v, t_n, t_rec, t_g = st.tabs(["📆 Visualizar Agenda", "➕ Novo Compromisso", "🔄 Repetições da Agenda", "⚙️ Alterar / Excluir"])
@@ -1744,7 +1773,6 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                     st.dataframe(df_cp_v, use_container_width=True)
                 
                 else:
-                    # MODO AGENDA
                     col_ag1, col_ag2 = st.columns([2, 2])
                     filtro_tempo = col_ag1.selectbox(
                         "Período:",
@@ -1775,7 +1803,6 @@ elif st.session_state["sistema_selecionado"] == "tarefas":
                             3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"
                         }
 
-                        # Agrupa compromissos por dia
                         grupos_por_data = df_agenda.groupby("dt_inicio_obj")
                         
                         for dt_grupo, grupo in grupos_por_data:
